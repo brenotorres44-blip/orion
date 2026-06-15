@@ -1,0 +1,1578 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ORION — Sistema de Organização Inteligente</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+
+<!-- Firebase SDKs -->
+<script type="module">
+import { initializeApp }                          from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword,
+         createUserWithEmailAndPassword,
+         signOut, onAuthStateChanged,
+         GoogleAuthProvider, signInWithPopup,
+         updatePassword, EmailAuthProvider,
+         reauthenticateWithCredential }           from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, doc,
+         getDocs, getDoc, setDoc, addDoc,
+         updateDoc, deleteDoc, query,
+         orderBy, onSnapshot, writeBatch,
+         serverTimestamp, where }                 from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+// ══════════════════════════════════════════════
+//  FIREBASE CONFIG
+// ══════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey:            "AIzaSyC7MHnCQKU71KnWhCzBnrRmw59L77_G9l8",
+  authDomain:        "projeto-logistica-avancada.firebaseapp.com",
+  projectId:         "projeto-logistica-avancada",
+  storageBucket:     "projeto-logistica-avancada.firebasestorage.app",
+  messagingSenderId: "421561042752",
+  appId:             "1:421561042752:web:86b60e4f670cf467c3dca5",
+  measurementId:     "G-VGE6Y8TW2F"
+};
+
+const app  = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db   = getFirestore(app);
+
+// ══════════════════════════════════════════════
+//  ESTADO GLOBAL
+// ══════════════════════════════════════════════
+let usuarioAtual = null;
+let armarios     = [];
+let itens        = [];
+let movimentos   = [];
+let usuarios     = [];
+let pinosConfig  = JSON.parse(localStorage.getItem('dos_pinos') || '{}');
+let espOnline    = false;
+let editandoArmId     = null;
+let editandoItemId    = null;
+let editandoUserId    = null;
+let currentArmId      = null;
+let currentGavId      = null;
+
+// Expõe ao escopo global para uso nos onclick do HTML
+Object.defineProperty(window, 'currentArmId', { get: () => currentArmId });
+Object.defineProperty(window, 'currentGavId', { get: () => currentGavId });
+
+const PERMISSOES = {
+  admin:    ['dashboard','armarios','itens','movimentos','historico','voz','esp32','acesso'],
+  operador: ['dashboard','armarios','itens','movimentos','historico','voz'],
+  consulta: ['dashboard','historico','voz']
+};
+
+// ══════════════════════════════════════════════
+//  UTILS
+// ══════════════════════════════════════════════
+const uid    = () => Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const ts     = () => new Date().toLocaleString('pt-BR');
+const fmtR   = v  => 'R$ ' + Number(v||0).toFixed(2).replace('.',',');
+const armById  = id => armarios.find(a => a.id === id);
+const gavById  = (aId,gId) => armById(aId)?.gavetas?.find(g => g.id === gId);
+const armNome  = id => armById(id)?.nome || '?';
+const gavLabel = (aId,gId) => { const g=gavById(aId,gId); return g ? (g.nome||`Gaveta ${g.num}`) : '?'; };
+const podeAcessar = p => usuarioAtual && (PERMISSOES[usuarioAtual.nivel]||[]).includes(p);
+
+function toast(msg, type='') {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'show ' + type;
+  clearTimeout(t._t); t._t = setTimeout(() => t.className='', 3200);
+}
+
+function openModal(title, msg, label, onConfirm) {
+  document.getElementById('modal-title-txt').textContent = title;
+  document.getElementById('modal-msg').textContent = msg;
+  document.getElementById('modal-confirm-btn').innerHTML = '✕ ' + label;
+  document.getElementById('modal-confirm-btn').onclick = () => { onConfirm(); closeModal(); };
+  document.getElementById('modal-overlay').classList.add('open');
+}
+function closeModal() { document.getElementById('modal-overlay').classList.remove('open'); }
+
+function tick() {
+  const n = new Date();
+  const el = document.getElementById('clock');
+  if(el) el.textContent = String(n.getHours()).padStart(2,'0')+':'+String(n.getMinutes()).padStart(2,'0')+':'+String(n.getSeconds()).padStart(2,'0');
+}
+setInterval(tick, 1000); tick();
+
+// ══════════════════════════════════════════════
+//  FIRESTORE — HELPERS
+// ══════════════════════════════════════════════
+const colRef  = name => collection(db, name);
+const docRef  = (col, id) => doc(db, col, id);
+
+async function fsGetAll(col) {
+  const snap = await getDocs(colRef(col));
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+async function fsSet(col, id, data)    { await setDoc(docRef(col,id), data, {merge:true}); }
+async function fsDelete(col, id)       { await deleteDoc(docRef(col,id)); }
+async function fsDeleteAll(col)        {
+  const snap = await getDocs(colRef(col));
+  const batch = writeBatch(db);
+  snap.docs.forEach(d => batch.delete(d.ref));
+  await batch.commit();
+}
+
+// ══════════════════════════════════════════════
+//  AUTH STATE
+// ══════════════════════════════════════════════
+onAuthStateChanged(auth, async fireUser => {
+  if (fireUser) {
+    // Busca perfil do usuário no Firestore
+    const perfil = await getDoc(docRef('usuarios', fireUser.uid));
+    if (perfil.exists()) {
+      usuarioAtual = { uid: fireUser.uid, email: fireUser.email, ...perfil.data() };
+      // Atualiza último acesso
+      await fsSet('usuarios', fireUser.uid, { ultimoAcesso: ts() });
+    } else {
+      // Primeiro login — cria perfil admin
+      usuarioAtual = { uid: fireUser.uid, email: fireUser.email, nome: 'Administrador', nivel: 'admin' };
+      await fsSet('usuarios', fireUser.uid, { nome:'Administrador', nivel:'admin', ativo:true, criado:ts(), ultimoAcesso:ts(), email:fireUser.email });
+    }
+    mostrarApp();
+  } else {
+    usuarioAtual = null;
+    mostrarLogin();
+  }
+});
+
+// ══════════════════════════════════════════════
+//  LOGIN / LOGOUT
+// ══════════════════════════════════════════════
+window.fazerLogin = async function() {
+  const email = document.getElementById('login-user').value.trim();
+  const senha  = document.getElementById('login-pass').value;
+  if(!email || !senha) { mostrarErroLogin('Preencha todos os campos'); return; }
+
+  const btn = document.querySelector('#login-overlay .hud-btn');
+  btn.innerHTML = '<i class="ti ti-loader"></i>Verificando...';
+  btn.disabled  = true;
+
+  try {
+    await signInWithEmailAndPassword(auth, email, senha);
+    document.getElementById('login-user').value = '';
+    document.getElementById('login-pass').value = '';
+    document.getElementById('login-erro').style.display = 'none';
+  } catch(e) {
+    const msgs = {
+      'auth/user-not-found':   'Usuário não encontrado',
+      'auth/wrong-password':   'Senha incorreta',
+      'auth/invalid-email':    'E-mail inválido',
+      'auth/invalid-credential': 'E-mail ou senha incorretos',
+      'auth/too-many-requests':'Muitas tentativas. Tente mais tarde.'
+    };
+    mostrarErroLogin(msgs[e.code] || 'Erro: ' + e.message);
+  }
+  btn.innerHTML = '<i class="ti ti-login"></i>Entrar no sistema';
+  btn.disabled  = false;
+}
+
+window.fazerLogout = async function() {
+  await signOut(auth);
+}
+
+window.loginGoogle = async function() {
+  try {
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    await signInWithPopup(auth, provider);
+    // onAuthStateChanged cuida do resto
+  } catch(e) {
+    if(e.code !== 'auth/popup-closed-by-user') {
+      mostrarErroLogin('Erro ao entrar com Google: ' + e.message);
+    }
+  }
+}
+
+function mostrarErroLogin(msg) {
+  const el = document.getElementById('login-erro');
+  el.textContent = msg; el.style.display = 'block';
+  document.getElementById('login-pass').value = '';
+  document.getElementById('login-pass').focus();
+}
+
+window.toggleSenhaLogin = function() {
+  const inp = document.getElementById('login-pass');
+  const btn = document.getElementById('btn-toggle-pass');
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  btn.innerHTML = show ? '<i class="ti ti-eye-off"></i>' : '<i class="ti ti-eye"></i>';
+}
+
+function mostrarApp() {
+  document.getElementById('login-overlay').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  const bar = document.getElementById('user-info-bar');
+  bar.style.display = 'flex';
+  document.getElementById('user-nome-disp').textContent = usuarioAtual.nome;
+  document.getElementById('user-nivel-disp').innerHTML = `<span class="nivel-badge nivel-${usuarioAtual.nivel}">${usuarioAtual.nivel}</span>`;
+  aplicarPermissoesNav();
+  carregarDados();
+}
+
+function mostrarLogin() {
+  document.getElementById('login-overlay').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('user-info-bar').style.display = 'none';
+  document.querySelectorAll('.nav-btn').forEach(b => b.style.display = '');
+}
+
+function aplicarPermissoesNav() {
+  if(!usuarioAtual) return;
+  const permitidos = PERMISSOES[usuarioAtual.nivel] || [];
+  document.querySelectorAll('.nav-btn[data-panel]').forEach(btn => {
+    btn.style.display = permitidos.includes(btn.dataset.panel) ? '' : 'none';
+  });
+}
+
+// ══════════════════════════════════════════════
+//  CARREGAR DADOS DO FIRESTORE
+// ══════════════════════════════════════════════
+async function carregarDados() {
+  try {
+    [armarios, itens, movimentos, usuarios] = await Promise.all([
+      fsGetAll('armarios'),
+      fsGetAll('itens'),
+      fsGetAll('movimentos'),
+      fsGetAll('usuarios')
+    ]);
+    // ordena movimentos por ts desc
+    movimentos.sort((a,b) => (b.ts||'').localeCompare(a.ts||''));
+    updateCounters();
+    renderDashboard();
+  } catch(e) {
+    toast('Erro ao carregar dados: ' + e.message, 'red');
+  }
+}
+
+// ══════════════════════════════════════════════
+//  NAVEGAÇÃO
+// ══════════════════════════════════════════════
+window.showPanel = function(id) {
+  if(usuarioAtual && !podeAcessar(id)) { toast('Sem permissão','red'); return; }
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  const panel = document.getElementById('panel-'+id);
+  const btn   = document.querySelector(`[data-panel="${id}"]`);
+  if(panel) panel.classList.add('active');
+  if(btn)   btn.classList.add('active');
+  if(id==='dashboard')  renderDashboard();
+  if(id==='armarios')   renderArmarios();
+  if(id==='itens')      { populateArmarioSelect(); renderTabela(); }
+  if(id==='movimentos') { renderMovLog(); populateMovSelect(); }
+  if(id==='historico')  renderHistorico();
+  if(id==='esp32')      initPainelEsp32();
+  if(id==='acesso')     renderTabelaUsuarios();
+}
+
+// ══════════════════════════════════════════════
+//  TOPBAR COUNTERS
+// ══════════════════════════════════════════════
+function updateCounters() {
+  const elA = document.getElementById('total-arm-disp');
+  const elG = document.getElementById('total-gav-disp');
+  if(elA) elA.textContent = armarios.length;
+  if(elG) elG.textContent = armarios.reduce((a,arm)=>a+(arm.gavetas?.length||0),0);
+}
+
+// ══════════════════════════════════════════════
+//  DASHBOARD
+// ══════════════════════════════════════════════
+function renderDashboard() {
+  updateCounters();
+  const totalItens = itens.length;
+  const totalQty   = itens.reduce((a,i)=>a+(i.qty||0),0);
+  const totalVal   = itens.reduce((a,i)=>a+(i.qty||0)*(i.preco||0),0);
+  const lowCount   = itens.filter(i=>i.min>0&&i.qty<=i.min).length;
+
+  document.getElementById('stats-row').innerHTML = `
+    <div class="stat-box" style="--w:${Math.min(100,armarios.length*20)}%"><div class="stat-label">Armários</div><div class="stat-value">${armarios.length}</div><div class="stat-unit">cadastrados</div></div>
+    <div class="stat-box" style="--w:60%"><div class="stat-label">Total de itens</div><div class="stat-value">${totalItens}</div><div class="stat-unit">cadastrados</div></div>
+    <div class="stat-box" style="--w:55%"><div class="stat-label">Unidades</div><div class="stat-value">${totalQty}</div><div class="stat-unit">em estoque</div></div>
+    <div class="stat-box" style="--w:70%"><div class="stat-label">Valor total</div><div class="stat-value" style="font-size:20px">${fmtR(totalVal)}</div><div class="stat-unit">inventário</div></div>
+    <div class="stat-box" style="--w:${lowCount>0?100:5}%;${lowCount>0?'border-color:var(--red)':''}"><div class="stat-label">Críticos</div><div class="stat-value" style="color:${lowCount>0?'var(--red)':'var(--green)'}">${lowCount}</div><div class="stat-unit">abaixo do mínimo</div></div>`;
+
+  document.getElementById('dash-arm-list').innerHTML = armarios.length
+    ? armarios.map(arm => {
+        const gItens = itens.filter(i=>i.armId===arm.id);
+        const cor = arm.cor||'#00d4ff';
+        return `<div style="display:flex;align-items:center;gap:12px;font-size:13px;padding:6px 0;border-bottom:1px solid var(--border)">
+          <span style="width:10px;height:10px;border-radius:50%;background:${cor};flex-shrink:0;box-shadow:0 0 6px ${cor}60"></span>
+          <span style="font-weight:600;flex:1">${arm.nome}</span>
+          <span style="color:var(--text-dim);font-size:11px">${arm.numGavetas||0} gav.</span>
+          <span style="color:var(--text-dim);font-size:11px">${gItens.length} itens</span>
+          <span style="color:${cor};font-size:11px">${gItens.reduce((a,i)=>a+(i.qty||0),0)} unid.</span>
+        </div>`;
+      }).join('')
+    : '<div style="color:var(--text-dim);font-size:13px;padding:12px">Nenhum armário cadastrado.</div>';
+
+  const last8 = movimentos.slice(0,8);
+  document.getElementById('dash-log').innerHTML = last8.length
+    ? last8.map(m=>logHtml(m)).join('')
+    : '<div style="color:var(--text-dim);font-size:12px;padding:12px">Nenhuma movimentação.</div>';
+
+  const lows = itens.filter(i=>i.min>0&&i.qty<=i.min);
+  document.getElementById('low-stock-body').innerHTML = lows.length
+    ? lows.map(i=>`<tr>
+        <td style="font-weight:600">${i.nome}</td>
+        <td><span style="color:${armById(i.armId)?.cor||'var(--cyan)'};font-weight:600">${armNome(i.armId)}</span></td>
+        <td><span class="gaveta-badge">G${gavById(i.armId,i.gavId)?.num||'?'}</span></td>
+        <td class="qty-low">${i.qty}</td><td>${i.min}</td>
+        <td><button class="hud-btn amber" style="padding:5px 12px;font-size:11px" onclick="window.abrirMovimento('${i.id}')">+ Entrada</button></td>
+      </tr>`).join('')
+    : '<tr><td colspan="6" style="color:var(--green);text-align:center;padding:16px">✓ Todos os itens estão OK</td></tr>';
+}
+
+function logHtml(m) {
+  const item  = itens.find(i=>i.id===m.itemId);
+  const nome  = item ? item.nome : (m.itemNome||'?');
+  const sinal = m.tipo==='entrada' ? '+' : '−';
+  return `<div class="log-item ${m.tipo==='entrada'?'entrada':m.tipo==='edit'?'edit':'saida'}">
+    <span class="log-time">${m.ts||''}</span>
+    <span class="log-desc">${(m.tipo||'').toUpperCase()} · ${nome}${m.obs?' · '+m.obs:''}</span>
+    <span class="log-qty">${sinal}${m.qty}</span>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════
+//  ARMÁRIOS
+// ══════════════════════════════════════════════
+document.getElementById('arm-ngav').addEventListener('input', buildGavNames);
+document.getElementById('arm-cor').addEventListener('input', e => {
+  document.getElementById('arm-cor-preview').textContent = e.target.value;
+});
+
+function buildGavNames() {
+  const n    = parseInt(document.getElementById('arm-ngav').value)||0;
+  const wrap = document.getElementById('gav-names-wrap');
+  const grid = document.getElementById('gav-names-grid');
+  if(n<1){wrap.style.display='none';return;}
+  wrap.style.display='';
+  const old = [...grid.querySelectorAll('input')].map(i=>i.value);
+  grid.innerHTML='';
+  for(let i=1;i<=n;i++){
+    grid.innerHTML+=`<div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:11px;color:var(--amber);font-weight:600;width:24px;flex-shrink:0">G${i}</span>
+      <input class="hud-input" id="gname-${i}" placeholder="Nome da gaveta ${i}" value="${old[i-1]||''}">
+    </div>`;
+  }
+}
+buildGavNames();
+
+window.salvarArmario = async function() {
+  const nome = document.getElementById('arm-nome').value.trim();
+  const local= document.getElementById('arm-local').value.trim();
+  const n    = parseInt(document.getElementById('arm-ngav').value)||0;
+  const cor  = document.getElementById('arm-cor').value;
+  if(!nome){toast('Informe o nome','red');return;}
+  if(n<1||n>30){toast('Gavetas: 1 a 30','red');return;}
+
+  const gavetas=[];
+  for(let i=1;i<=n;i++){
+    const nomeG=document.getElementById('gname-'+i)?.value.trim()||'';
+    if(editandoArmId){
+      const arm=armById(editandoArmId);
+      const ex=arm?.gavetas?.find(g=>g.num===i);
+      gavetas.push({id:ex?.id||uid(),num:i,nome:nomeG});
+    } else gavetas.push({id:uid(),num:i,nome:nomeG});
+  }
+
+  const armId = editandoArmId || uid();
+  const dados = {id:armId,nome,local,numGavetas:n,gavetas,cor,criado:editandoArmId?(armById(editandoArmId)?.criado||ts()):ts()};
+  await fsSet('armarios', armId, dados);
+
+  if(editandoArmId){
+    const idx=armarios.findIndex(a=>a.id===editandoArmId);
+    if(idx>=0) armarios[idx]=dados; else armarios.push(dados);
+    toast('Armário atualizado ✓');
+    editandoArmId=null;
+  } else {
+    armarios.push(dados);
+    toast('Armário cadastrado ✓');
+  }
+  updateCounters(); limparFormArmario(); renderArmarios();
+}
+
+window.editarArmario = function(id) {
+  const arm=armById(id); if(!arm)return;
+  editandoArmId=id;
+  document.getElementById('arm-nome').value=arm.nome;
+  document.getElementById('arm-local').value=arm.local||'';
+  document.getElementById('arm-ngav').value=arm.numGavetas;
+  document.getElementById('arm-cor').value=arm.cor||'#00d4ff';
+  document.getElementById('arm-cor-preview').textContent=arm.cor||'#00d4ff';
+  buildGavNames();
+  arm.gavetas?.forEach(g=>{
+    const inp=document.getElementById('gname-'+g.num);
+    if(inp) inp.value=g.nome||'';
+  });
+  document.getElementById('arm-form-title').innerHTML='✎ Editando: '+arm.nome;
+  document.getElementById('btn-cancel-arm').style.display='';
+  showPanel('armarios');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+window.excluirArmario = function(id) {
+  const arm=armById(id);
+  openModal('Excluir armário',`Excluir "${arm?.nome}"? Todos os itens dentro serão removidos.`,'Excluir tudo', async()=>{
+    const itensBraco = itens.filter(i=>i.armId===id);
+    for(const it of itensBraco) await fsDelete('itens', it.id);
+    await fsDelete('armarios', id);
+    itens     = itens.filter(i=>i.armId!==id);
+    armarios  = armarios.filter(a=>a.id!==id);
+    updateCounters(); renderArmarios(); renderDashboard();
+    toast('Armário excluído','amber');
+  });
+}
+
+window.cancelarArmario = function() { limparFormArmario(); }
+
+function limparFormArmario(){
+  editandoArmId=null;
+  ['arm-nome','arm-local'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('arm-ngav').value='5';
+  document.getElementById('arm-cor').value='#00d4ff';
+  document.getElementById('arm-cor-preview').textContent='Ciano padrão';
+  buildGavNames();
+  document.getElementById('arm-form-title').innerHTML='+ Adicionar armário';
+  document.getElementById('btn-cancel-arm').style.display='none';
+}
+
+function renderArmarios(){
+  const grid=document.getElementById('armario-grid');
+  const empty=document.getElementById('arm-empty');
+  if(!armarios.length){grid.innerHTML='';empty.style.display='';return;}
+  empty.style.display='none';
+  grid.innerHTML=armarios.map(arm=>{
+    const nItens=itens.filter(i=>i.armId===arm.id).length;
+    const nQty=itens.filter(i=>i.armId===arm.id).reduce((a,i)=>a+(i.qty||0),0);
+    const cor=arm.cor||'#00d4ff';
+    const gavetasHtml=(arm.gavetas||[]).map(g=>{
+      const gItens=itens.filter(i=>i.armId===arm.id&&i.gavId===g.id);
+      const gLow=gItens.some(i=>i.min>0&&i.qty<=i.min);
+      const nomeGav=g.nome?`<span class="gav-name">${g.nome}</span>`:'';
+      return `<div class="gav-chip" onclick="window.abrirGaveta('${arm.id}','${g.id}')" title="${g.nome||'Gaveta '+g.num}">
+        ${gLow?'<div class="gav-alert"></div>':''}
+        <span class="gav-num">G${g.num}</span>${nomeGav}
+        <span class="gav-count">(${gItens.length})</span>
+      </div>`;
+    }).join('');
+    return `<div class="armario-card" id="acard-${arm.id}">
+      <div class="armario-header">
+        <div>
+          <div class="armario-nome" style="color:${cor}">${arm.nome}</div>
+          <div class="armario-local">${arm.local?'📍 '+arm.local:''}</div>
+        </div>
+        <div class="armario-actions">
+          <button class="icon-btn" onclick="window.editarArmario('${arm.id}')">✎</button>
+          <button class="icon-btn danger" onclick="window.excluirArmario('${arm.id}')">✕</button>
+        </div>
+      </div>
+      <div class="armario-body">
+        <div class="gavetas-row">${gavetasHtml}</div>
+        <div class="armario-meta"><span>${arm.numGavetas} gavetas</span><span>${nItens} itens</span><span>${nQty} unid.</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════
+//  GAVETA DETAIL
+// ══════════════════════════════════════════════
+window.abrirGaveta = function(armId, gavId){
+  currentArmId=armId; currentGavId=gavId;
+  const arm=armById(armId); const gav=gavById(armId,gavId);
+  if(!arm||!gav) return;
+  document.getElementById('detail-title').textContent=`${arm.nome}  ·  ${gav.nome||'Gaveta '+gav.num}`;
+  document.getElementById('detail-sub').textContent=`${arm.local||''} · Clique num item para editar`;
+  renderDetalheGaveta();
+  const d=document.getElementById('gaveta-detail');
+  d.classList.add('open');
+  document.querySelectorAll('.gav-chip').forEach(c=>c.classList.remove('selected-gav'));
+  const ac=document.getElementById('acard-'+armId);
+  if(ac){
+    const chips=[...ac.querySelectorAll('.gav-chip')];
+    const idx=(arm.gavetas||[]).findIndex(g=>g.id===gavId);
+    if(chips[idx]) chips[idx].classList.add('selected-gav');
+  }
+  d.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+window.fecharDetalhe = function(){
+  document.getElementById('gaveta-detail').classList.remove('open');
+  document.querySelectorAll('.gav-chip').forEach(c=>c.classList.remove('selected-gav'));
+  currentArmId=null; currentGavId=null;
+}
+
+function renderDetalheGaveta(){
+  if(!currentArmId||!currentGavId) return;
+  const gavItens=itens.filter(i=>i.armId===currentArmId&&i.gavId===currentGavId);
+  const tbody=document.getElementById('detail-tbody');
+  tbody.innerHTML=gavItens.length?gavItens.map(i=>{
+    const low=i.min>0&&i.qty<=i.min;
+    return `<tr>
+      <td style="font-weight:600;color:${low?'var(--red)':'var(--text)'}">${i.nome}</td>
+      <td class="${low?'qty-low':'qty-ok'}">${i.qty}</td>
+      <td style="color:var(--text-dim)">${i.min}</td>
+      <td>${fmtR(i.preco)}</td>
+      <td style="color:var(--text-dim)">${i.cat||'—'}</td>
+      <td><div class="action-btns">
+        <button class="hud-btn" style="padding:5px 10px" onclick="window.editarItem('${i.id}')">✎</button>
+        <button class="hud-btn amber" style="padding:5px 10px" onclick="window.abrirMovimento('${i.id}')">⇅</button>
+        <button class="hud-btn danger" style="padding:5px 10px" onclick="window.excluirItem('${i.id}')">✕</button>
+      </div></td>
+    </tr>`;
+  }).join('')
+  :'<tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:20px">Gaveta vazia</td></tr>';
+}
+
+window.abrirFormItem = function(itemId, preArmId, preGavId){
+  showPanel('itens');
+  populateArmarioSelect(preArmId||'');
+  if(preArmId) populateGavetasSelect(preArmId,'f-gaveta',preGavId||'');
+  if(itemId) editarItem(itemId);
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+// ══════════════════════════════════════════════
+//  ITENS
+// ══════════════════════════════════════════════
+function populateArmarioSelect(selId, selectedArmId=''){
+  if(typeof selId!=='string'||!document.getElementById(selId)) selId='f-armario';
+  const sel=document.getElementById(selId);
+  sel.innerHTML=armarios.length
+    ?armarios.map(a=>`<option value="${a.id}"${a.id===selectedArmId?' selected':''}>${a.nome}</option>`).join('')
+    :'<option value="">Nenhum armário</option>';
+  populateGavetasSelect(sel.value,'f-gaveta','');
+}
+
+function populateGavetasSelect(armId, gavSelId='f-gaveta', selectedGavId=''){
+  const useArmId=armId||document.getElementById('f-armario')?.value;
+  const sel=document.getElementById(gavSelId||'f-gaveta');
+  if(!sel) return;
+  const arm=armById(useArmId);
+  sel.innerHTML=arm&&arm.gavetas?.length
+    ?arm.gavetas.map(g=>`<option value="${g.id}"${g.id===selectedGavId?' selected':''}>${g.nome||'Gaveta '+g.num}</option>`).join('')
+    :'<option value="">Selecione um armário</option>';
+}
+
+window.salvarItem = async function(){
+  const nome =document.getElementById('f-nome').value.trim();
+  const armId=document.getElementById('f-armario').value;
+  const gavId=document.getElementById('f-gaveta').value;
+  const qty  =parseInt(document.getElementById('f-qty').value)||0;
+  const min  =parseInt(document.getElementById('f-min').value)||0;
+  const preco=parseFloat(document.getElementById('f-preco').value)||0;
+  const cat  =document.getElementById('f-cat').value.trim();
+  if(!nome||!armId||!gavId){toast('Preencha nome, armário e gaveta','red');return;}
+
+  if(editandoItemId){
+    const idx=itens.findIndex(i=>i.id===editandoItemId);
+    const upd={...itens[idx],nome,armId,gavId,min,preco,cat};
+    await fsSet('itens',editandoItemId,upd);
+    itens[idx]=upd;
+    await adicionarLog(editandoItemId,nome,'edit',0,'Dados editados');
+    toast('Item atualizado ✓');
+    editandoItemId=null;
+  } else {
+    const novo={id:uid(),nome,armId,gavId,qty,min,preco,cat,criado:ts()};
+    await fsSet('itens',novo.id,novo);
+    itens.push(novo);
+    if(qty>0) await adicionarLog(novo.id,nome,'entrada',qty,'Cadastro inicial');
+    toast('Item cadastrado ✓');
+  }
+  cancelarEdicaoItem(); renderTabela();
+  if(document.getElementById('gaveta-detail').classList.contains('open')) renderDetalheGaveta();
+  renderDashboard();
+}
+
+window.editarItem = function(id){
+  const item=itens.find(i=>i.id===id); if(!item)return;
+  editandoItemId=id;
+  document.getElementById('f-nome').value=item.nome;
+  populateArmarioSelect('f-armario',item.armId);
+  populateGavetasSelect(item.armId,'f-gaveta',item.gavId);
+  document.getElementById('f-qty').value=item.qty;
+  document.getElementById('f-qty').disabled=true;
+  document.getElementById('f-min').value=item.min;
+  document.getElementById('f-preco').value=item.preco;
+  document.getElementById('f-cat').value=item.cat||'';
+  document.getElementById('form-title-itens').innerHTML='✎ Editando: '+item.nome;
+  document.getElementById('btn-cancelar-edit').style.display='';
+  showPanel('itens');
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+window.excluirItem = function(id){
+  const item=itens.find(i=>i.id===id);
+  openModal('Excluir item',`Excluir "${item?.nome}"?`,'Excluir',async()=>{
+    await fsDelete('itens',id);
+    itens=itens.filter(i=>i.id!==id);
+    renderTabela(); renderDetalheGaveta(); renderDashboard();
+    toast('Item excluído','amber');
+  });
+}
+
+function cancelarEdicaoItem(){
+  editandoItemId=null;
+  ['f-nome','f-qty','f-min','f-preco','f-cat'].forEach(id=>{
+    const el=document.getElementById(id); el.value=''; el.disabled=false;
+  });
+  document.getElementById('form-title-itens').innerHTML='+ Cadastrar item';
+  document.getElementById('btn-cancelar-edit').style.display='none';
+}
+window.cancelarEdicaoItem = cancelarEdicaoItem;
+
+function renderTabela(){
+  populateArmFilterSelect();
+  const q =document.getElementById('search-itens').value.toLowerCase();
+  const af=document.getElementById('filter-arm').value;
+  const gf=document.getElementById('filter-gav').value;
+  const filtered=itens.filter(i=>
+    (!q||i.nome.toLowerCase().includes(q)||(i.cat||'').toLowerCase().includes(q))&&
+    (!af||i.armId===af)&&(!gf||i.gavId===gf)
+  );
+  const tbody=document.getElementById('tabela-itens');
+  tbody.innerHTML=filtered.length?filtered.map(i=>{
+    const low=i.min>0&&i.qty<=i.min;
+    const cor=armById(i.armId)?.cor||'var(--cyan)';
+    return `<tr>
+      <td style="font-weight:600;color:${low?'var(--red)':'var(--text)'}">${i.nome}${low?'<span class="led red" style="width:6px;height:6px;margin-left:6px"></span>':''}</td>
+      <td><span style="color:${cor};font-weight:600;font-size:12px">${armNome(i.armId)}</span></td>
+      <td><span class="gaveta-badge">G${gavById(i.armId,i.gavId)?.num||'?'} ${gavById(i.armId,i.gavId)?.nome?'· '+gavById(i.armId,i.gavId).nome:''}</span></td>
+      <td class="${low?'qty-low':'qty-ok'}">${i.qty}</td>
+      <td style="color:var(--text-dim)">${i.min}</td>
+      <td>${fmtR(i.preco)}</td>
+      <td style="color:var(--text-dim)">${i.cat||'—'}</td>
+      <td><div class="action-btns">
+        <button class="hud-btn" style="padding:5px 9px" onclick="window.editarItem('${i.id}')">✎</button>
+        <button class="hud-btn amber" style="padding:5px 9px" onclick="window.abrirMovimento('${i.id}')">⇅</button>
+        <button class="hud-btn danger" style="padding:5px 9px" onclick="window.excluirItem('${i.id}')">✕</button>
+      </div></td>
+    </tr>`;
+  }).join(''):'<tr><td colspan="8" style="color:var(--text-dim);text-align:center;padding:20px">Nenhum item encontrado.</td></tr>';
+}
+
+function populateArmFilterSelect(){
+  const sel=document.getElementById('filter-arm');
+  if(!sel)return;
+  const cur=sel.value;
+  sel.innerHTML='<option value="">Todos os armários</option>'+armarios.map(a=>`<option value="${a.id}">${a.nome}</option>`).join('');
+  sel.value=cur;
+  updateGavFilter();
+}
+function updateGavFilter(){
+  const armId=document.getElementById('filter-arm')?.value;
+  const sel=document.getElementById('filter-gav');
+  if(!sel)return;
+  const cur=sel.value;
+  if(!armId){sel.innerHTML='<option value="">Todas as gavetas</option>';return;}
+  const arm=armById(armId);
+  sel.innerHTML='<option value="">Todas as gavetas</option>'+(arm?.gavetas?.map(g=>`<option value="${g.id}">${g.nome||'Gaveta '+g.num}</option>`).join('')||'');
+  sel.value=cur;
+}
+document.getElementById('filter-arm')?.addEventListener('change',()=>{updateGavFilter();renderTabela();});
+
+// ══════════════════════════════════════════════
+//  MOVIMENTOS
+// ══════════════════════════════════════════════
+async function adicionarLog(itemId,itemNome,tipo,qty,obs){
+  const mov={id:uid(),itemId,itemNome,tipo,qty,obs:obs||'',ts:ts(),usuario:usuarioAtual?.nome||''};
+  await fsSet('movimentos',mov.id,mov);
+  movimentos.unshift(mov);
+}
+
+function populateMovSelect(){
+  const sel=document.getElementById('mov-item');
+  sel.innerHTML=itens.length
+    ?itens.map(i=>`<option value="${i.id}">${i.nome} — ${armNome(i.armId)} G${gavById(i.armId,i.gavId)?.num||'?'} — Qtd: ${i.qty}</option>`).join('')
+    :'<option value="">Nenhum item cadastrado</option>';
+}
+
+window.abrirMovimento = function(id){
+  showPanel('movimentos'); populateMovSelect();
+  document.getElementById('mov-item').value=id;
+  document.getElementById('mov-tipo').value='entrada';
+}
+
+window.registrarMovimento = async function(){
+  const itemId=document.getElementById('mov-item').value;
+  const tipo  =document.getElementById('mov-tipo').value;
+  const qty   =parseInt(document.getElementById('mov-qty').value)||0;
+  const obs   =document.getElementById('mov-obs').value.trim();
+  if(!itemId){toast('Selecione um item','red');return;}
+  if(qty<=0){toast('Quantidade inválida','red');return;}
+  const idx=itens.findIndex(i=>i.id===itemId);
+  if(idx<0){toast('Item não encontrado','red');return;}
+  if(tipo==='saida'&&itens[idx].qty<qty){toast(`Estoque insuficiente (${itens[idx].qty} disponíveis)`,'red');return;}
+  itens[idx].qty+=tipo==='entrada'?qty:-qty;
+  await fsSet('itens',itemId,itens[idx]);
+  await adicionarLog(itemId,itens[idx].nome,tipo,qty,obs);
+  document.getElementById('mov-qty').value='';
+  document.getElementById('mov-obs').value='';
+  toast(`${tipo.toUpperCase()} registrada: ${qty}× ${itens[idx].nome}`,tipo==='entrada'?'':'amber');
+  renderMovLog(); populateMovSelect(); renderDashboard();
+  if(document.getElementById('gaveta-detail').classList.contains('open')) renderDetalheGaveta();
+}
+
+function renderMovLog(){
+  const el=document.getElementById('mov-log');
+  el.innerHTML=movimentos.length?movimentos.map(m=>logHtml(m)).join('')
+    :'<div style="color:var(--text-dim);font-size:12px;padding:16px">Nenhuma movimentação.</div>';
+}
+
+window.limparHistorico = function(){
+  if(!podeAcessar('movimentos')){toast('Sem permissão','red');return;}
+  openModal('Limpar histórico',`Apagar ${movimentos.length} movimentações?`,'Limpar tudo',async()=>{
+    await fsDeleteAll('movimentos');
+    movimentos=[];
+    renderMovLog(); renderDashboard();
+    toast('Histórico limpo','amber');
+  });
+}
+
+// ══════════════════════════════════════════════
+//  HISTÓRICO
+// ══════════════════════════════════════════════
+function renderHistorico(){
+  populateHistArmSelect();
+  const q =document.getElementById('hist-search').value.toLowerCase();
+  const af=document.getElementById('hist-arm').value;
+  const filtered=itens.filter(i=>(!q||i.nome.toLowerCase().includes(q)||(i.cat||'').toLowerCase().includes(q))&&(!af||i.armId===af));
+  const tbody=document.getElementById('hist-body');
+  tbody.innerHTML=filtered.map(i=>{
+    const low=i.min>0&&i.qty<=i.min;
+    const status=i.qty===0?'<span style="color:var(--red)">SEM ESTOQUE</span>':low?'<span style="color:var(--amber)">BAIXO</span>':'<span style="color:var(--green)">OK</span>';
+    const cor=armById(i.armId)?.cor||'var(--cyan)';
+    return `<tr>
+      <td style="font-weight:600">${i.nome}</td>
+      <td><span style="color:${cor};font-weight:600;font-size:12px">${armNome(i.armId)}</span></td>
+      <td><span class="gaveta-badge">G${gavById(i.armId,i.gavId)?.num||'?'}</span></td>
+      <td style="color:var(--text-dim)">${i.cat||'—'}</td>
+      <td class="${low?'qty-low':'qty-ok'}">${i.qty}</td>
+      <td style="color:var(--text-dim)">${i.min}</td>
+      <td>${fmtR(i.preco)}</td>
+      <td style="color:var(--cyan)">${fmtR((i.qty||0)*(i.preco||0))}</td>
+      <td>${status}</td>
+    </tr>`;
+  }).join('')||'<tr><td colspan="9" style="color:var(--text-dim);text-align:center;padding:20px">Nenhum resultado.</td></tr>';
+  const totVal=filtered.reduce((a,i)=>a+(i.qty||0)*(i.preco||0),0);
+  const totQty=filtered.reduce((a,i)=>a+(i.qty||0),0);
+  document.getElementById('hist-totais').innerHTML=`
+    <span>Itens: <b style="color:var(--cyan)">${filtered.length}</b></span>
+    <span>Unidades: <b style="color:var(--cyan)">${totQty}</b></span>
+    <span>Valor: <b style="color:var(--amber)">${fmtR(totVal)}</b></span>`;
+}
+
+function populateHistArmSelect(){
+  const sel=document.getElementById('hist-arm');
+  if(!sel)return;
+  const cur=sel.value;
+  sel.innerHTML='<option value="">Todos os armários</option>'+armarios.map(a=>`<option value="${a.id}">${a.nome}</option>`).join('');
+  sel.value=cur;
+}
+
+// ══════════════════════════════════════════════
+//  VOZ
+// ══════════════════════════════════════════════
+let recognition=null, voiceOn=false;
+
+function setupRecognition(){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  if(!SR) return null;
+  const r=new SR(); r.lang='pt-BR'; r.continuous=false; r.interimResults=true;
+  r.onstart=()=>{
+    voiceOn=true;
+    document.getElementById('mic-btn').classList.add('listening');
+    document.getElementById('voice-status').textContent='● OUVINDO... FALE O NOME DO ITEM';
+    document.getElementById('voice-status').style.color='var(--red)';
+    document.getElementById('radar-sweep').classList.add('active');
+    document.getElementById('voice-transcript').textContent='...';
+  };
+  r.onresult=e=>{
+    const t=e.results[0][0].transcript;
+    document.getElementById('voice-transcript').textContent=t;
+    if(e.results[0].isFinal) processarVozComESP(t);
+  };
+  r.onerror=e=>{stopVoz();if(e.error==='not-allowed')toast('Microfone bloqueado','red');else toast('Erro: '+e.error,'red');};
+  r.onend=()=>stopVoz();
+  return r;
+}
+
+window.toggleVoz = function(){
+  if(voiceOn){stopVoz();return;}
+  if(!recognition) recognition=setupRecognition();
+  if(!recognition){toast('Use Chrome para reconhecimento de voz','amber');return;}
+  clearGavetaDisplay();
+  document.getElementById('voice-result').style.display='none';
+  try{recognition.start();}catch(e){toast('Erro ao iniciar microfone','red');}
+}
+
+function stopVoz(){
+  voiceOn=false;
+  try{recognition?.stop();}catch(e){}
+  document.getElementById('mic-btn').classList.remove('listening');
+  document.getElementById('voice-status').textContent='Clique no microfone para iniciar';
+  document.getElementById('voice-status').style.color='';
+  document.getElementById('radar-sweep').classList.remove('active');
+}
+
+function clearGavetaDisplay(){
+  document.querySelectorAll('.gd-box').forEach(b=>b.classList.remove('lit'));
+}
+
+function processarVoz(texto){
+  const t=texto.toLowerCase().trim();
+  document.getElementById('voice-transcript').textContent='"'+texto+'"';
+  let best=null,bestScore=0;
+  itens.forEach(item=>{
+    const n=item.nome.toLowerCase(); let score=0;
+    n.split(' ').forEach(p=>{if(t.includes(p))score+=p.length;});
+    t.split(' ').forEach(p=>{if(n.includes(p))score+=p.length;});
+    if(score>bestScore){bestScore=score;best=item;}
+  });
+  const rv=document.getElementById('voice-result');
+  rv.style.display='';
+  if(best&&bestScore>=2){
+    const arm=armById(best.armId); const gav=gavById(best.armId,best.gavId);
+    const cor=arm?.cor||'#00d4ff';
+    clearGavetaDisplay();
+    document.getElementById('vr-title').innerHTML='◉ Item localizado';
+    document.getElementById('vr-content').innerHTML=`
+      <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px">
+        <div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Item</div><div style="font-size:16px;font-weight:700;color:var(--cyan)">${best.nome}</div></div>
+        <div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Armário</div><div style="font-size:15px;font-weight:700;color:${cor}">${arm?.nome||'?'}</div></div>
+        <div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Local</div><div style="color:var(--text)">${arm?.local||'—'}</div></div>
+        <div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Estoque</div><div style="color:${best.qty>best.min?'var(--green)':'var(--red)'}">${best.qty} unid.</div></div>
+      </div>`;
+    document.getElementById('gaveta-display').innerHTML=(arm?.gavetas||[]).map(g=>{
+      const isTarget=g.id===best.gavId;
+      return `<div class="gd-box ${isTarget?'lit':''}">
+        <div class="gd-num">${g.num}</div>
+        <div class="gd-label">${g.nome||'Gaveta'}</div>
+        <div class="gd-led"></div>
+      </div>`;
+    }).join('');
+    toast(`Localizado: ${arm?.nome} · G${gav?.num||'?'}`,'');
+    if('speechSynthesis' in window){
+      const u=new SpeechSynthesisUtterance(`${best.nome} está no armário ${arm?.nome||''}, gaveta ${gav?.num||''}`);
+      u.lang='pt-BR'; speechSynthesis.speak(u);
+    }
+    return best;
+  } else {
+    clearGavetaDisplay();
+    document.getElementById('vr-title').innerHTML='✕ Não encontrado';
+    document.getElementById('vr-content').innerHTML=`<div style="color:var(--text-dim);font-size:14px">Nenhum item corresponde a "<span style="color:var(--amber)">${texto}</span>".</div>`;
+    document.getElementById('gaveta-display').innerHTML='';
+    toast('Item não encontrado','amber');
+    return null;
+  }
+}
+
+async function processarVozComESP(texto){
+  const best=processarVoz(texto);
+  if(!best||!espOnline) return;
+  const res=await espPost('/localizar',{armId:best.armId,gavId:best.gavId,abrirTrava:false});
+  if(res?.ok) toast(`◉ ESP32: LED G${gavById(best.armId,best.gavId)?.num} aceso ✓`,'');
+}
+
+// ══════════════════════════════════════════════
+//  ESP32
+// ══════════════════════════════════════════════
+function espUrl(rota){
+  const ip=document.getElementById('esp-ip')?.value.trim()||'192.168.1.50';
+  const port=document.getElementById('esp-porta')?.value.trim()||'80';
+  return `http://${ip}:${port}${rota}`;
+}
+async function espPost(rota,body){
+  try{ const r=await fetch(espUrl(rota),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(4000)}); return await r.json(); }
+  catch(e){ return null; }
+}
+async function espGet(rota){
+  try{ const r=await fetch(espUrl(rota),{signal:AbortSignal.timeout(4000)}); return await r.json(); }
+  catch(e){ return null; }
+}
+function setEspStatus(online,msg=''){
+  espOnline=online;
+  const el=document.getElementById('esp32-status');
+  const box=document.getElementById('esp-conn-status');
+  if(el){el.textContent=online?'ONLINE':'OFFLINE';el.style.color=online?'var(--green)':'var(--red)';}
+  if(box) box.innerHTML=online?`<span class="led"></span> Conectado — ${msg}`:`<span class="led red"></span> ${msg||'Sem resposta'}`;
+}
+window.testarConexao=async function(){
+  const box=document.getElementById('esp-conn-status');
+  if(box) box.innerHTML=`<span class="led amber"></span> Testando...`;
+  const res=await espGet('/ping');
+  if(res?.status==='online') setEspStatus(true,`IP ${res.ip} · ${res.gavetas} gavetas`);
+  else setEspStatus(false,'Verifique o IP e se o ESP32 está ligado');
+}
+window.testarLeds=async function(){
+  const res=await espGet('/teste');
+  if(res?.ok) toast('Sequência de LEDs enviada ✓',''); else toast('ESP32 não respondeu','red');
+}
+window.fecharTodasTravas=async function(){
+  const res=await espPost('/trava/todas',{});
+  if(res?.ok) toast('Todas as travas fechadas ✓',''); else toast('ESP32 não respondeu','red');
+}
+window.renderPinosForm=function(){
+  const armId=document.getElementById('esp-arm-sel')?.value;
+  const arm=armById(armId); const form=document.getElementById('pinos-form');
+  if(!arm||!form) return;
+  const PINOS=[4,13,14,16,17,18,19,21,22,23,25,26,27,32,33];
+  const opts=PINOS.map(p=>`<option value="${p}">GPIO ${p}</option>`).join('');
+  form.innerHTML=`<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:8px;margin-bottom:8px">
+    <div style="font-size:10px;color:var(--cyan);text-transform:uppercase;font-weight:700;padding:6px 0">Gaveta</div>
+    <div style="font-size:10px;color:var(--cyan);text-transform:uppercase;font-weight:700;padding:6px 0">Pino LED</div>
+    <div style="font-size:10px;color:var(--cyan);text-transform:uppercase;font-weight:700;padding:6px 0">Pino trava</div>
+  </div>`+(arm.gavetas||[]).map(g=>{
+    const key=armId+'_'+g.id; const saved=pinosConfig[key]||{};
+    return `<div style="display:grid;grid-template-columns:1.5fr 1fr 1fr;gap:8px;margin-bottom:6px;align-items:center">
+      <div style="font-size:13px;font-weight:600;color:var(--amber)">G${g.num} <span style="color:var(--text-dim);font-weight:400;font-size:11px">${g.nome||''}</span></div>
+      <select class="hud-select" id="pino-led-${key}" style="padding:8px 10px;font-size:12px"><option value="">— Sem LED</option>${opts}</select>
+      <select class="hud-select" id="pino-trv-${key}" style="padding:8px 10px;font-size:12px"><option value="">— Sem trava</option>${opts}</select>
+    </div>`;
+  }).join('');
+  (arm.gavetas||[]).forEach(g=>{
+    const key=armId+'_'+g.id; const saved=pinosConfig[key]||{};
+    const ls=document.getElementById('pino-led-'+key);
+    const ts2=document.getElementById('pino-trv-'+key);
+    if(ls&&saved.pinoLed)   ls.value=saved.pinoLed;
+    if(ts2&&saved.pinoTrava) ts2.value=saved.pinoTrava;
+  });
+  renderManualGrid(arm);
+}
+window.salvarPinosLocal=function(){
+  const armId=document.getElementById('esp-arm-sel')?.value;
+  const arm=armById(armId); if(!arm) return;
+  (arm.gavetas||[]).forEach(g=>{
+    const key=armId+'_'+g.id;
+    const led=document.getElementById('pino-led-'+key)?.value;
+    const trv=document.getElementById('pino-trv-'+key)?.value;
+    pinosConfig[key]={pinoLed:led?parseInt(led):null,pinoTrava:trv?parseInt(trv):null};
+  });
+  localStorage.setItem('dos_pinos',JSON.stringify(pinosConfig));
+  toast('Pinos salvos ✓','');
+}
+window.enviarConfigESP32=async function(){
+  salvarPinosLocal();
+  const payload={gavetas:[]};
+  armarios.forEach(arm=>{
+    (arm.gavetas||[]).forEach(g=>{
+      const key=arm.id+'_'+g.id; const conf=pinosConfig[key]||{};
+      if(conf.pinoLed) payload.gavetas.push({armId:arm.id,gavId:g.id,pinoLed:conf.pinoLed,pinoTrava:conf.pinoTrava||-1});
+    });
+  });
+  if(!payload.gavetas.length){toast('Configure ao menos um pino LED','amber');return;}
+  const res=await espPost('/configurar',payload);
+  if(res?.ok){setEspStatus(true,`${res.gavetas} gavetas`);toast(`ESP32 configurado: ${res.gavetas} gavetas ✓`,'');}
+  else toast('Falha ao configurar ESP32','red');
+}
+function renderManualGrid(arm){
+  const grid=document.getElementById('manual-grid'); if(!grid||!arm) return;
+  grid.innerHTML=(arm.gavetas||[]).map(g=>{
+    const key=arm.id+'_'+g.id; const conf=pinosConfig[key]||{};
+    return `<div style="background:var(--bg3);border:1px solid var(--border);padding:14px;display:flex;flex-direction:column;gap:8px">
+      <div style="font-size:13px;font-weight:700;color:var(--amber)">G${g.num} <span style="color:var(--text-dim);font-weight:400;font-size:11px">${g.nome||''}</span></div>
+      ${conf.pinoLed?`<div style="font-size:10px;color:var(--text-dim)">LED → GPIO ${conf.pinoLed}</div>`:'<div style="font-size:10px;color:var(--text-dim)">Sem LED</div>'}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+        <button class="hud-btn" style="padding:5px 10px;font-size:11px" ${conf.pinoLed?'':'disabled'} onclick="window.acionarLedManual('${arm.id}','${g.id}',true)">LED</button>
+        <button class="hud-btn danger" style="padding:5px 10px;font-size:11px" ${conf.pinoLed?'':'disabled'} onclick="window.acionarLedManual('${arm.id}','${g.id}',false)">Apagar</button>
+        ${conf.pinoTrava?`<button class="hud-btn amber" style="padding:5px 10px;font-size:11px" onclick="window.acionarTravaManual('${arm.id}','${g.id}')">Abrir</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+window.acionarLedManual=async function(aId,gId,acender){
+  if(acender){const r=await espPost('/localizar',{armId:aId,gavId:gId,abrirTrava:false});if(r?.ok)toast('LED aceso ✓','');else toast('ESP32 não respondeu','red');}
+  else{const r=await espPost('/apagar',{armId:aId,gavId:gId});if(r?.ok)toast('LED apagado','');else toast('ESP32 não respondeu','red');}
+}
+window.acionarTravaManual=async function(aId,gId){
+  const r=await espPost('/trava',{armId:aId,gavId:gId,abrir:true});
+  if(r?.ok) toast('Trava aberta por 3s ✓',''); else toast('ESP32 não respondeu','red');
+}
+function populateEspArmSelect(){
+  const sel=document.getElementById('esp-arm-sel'); if(!sel) return;
+  const cur=sel.value;
+  sel.innerHTML=armarios.length?armarios.map(a=>`<option value="${a.id}">${a.nome}</option>`).join(''):'<option value="">Nenhum armário</option>';
+  if(cur) sel.value=cur;
+  renderPinosForm();
+}
+function initPainelEsp32(){ populateEspArmSelect(); testarConexao(); }
+setInterval(async()=>{const r=await espGet('/ping').catch(()=>null);setEspStatus(!!(r?.status==='online'),r?`IP ${r.ip}`:'');},30000);
+
+// ══════════════════════════════════════════════
+//  ACESSO — USUÁRIOS (Firebase Auth + Firestore)
+// ══════════════════════════════════════════════
+window.abrirFormUsuario=function(){
+  editandoUserId=null;
+  ['ac-nome','ac-login','ac-senha','ac-senha2'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('ac-nivel').value='operador';
+  document.getElementById('ac-status').value='ativo';
+  document.getElementById('ac-senha').placeholder='mínimo 6 caracteres';
+  document.getElementById('ac-senha-hint').textContent='';
+  document.getElementById('form-usuario-title').innerHTML='<i class="ti ti-user-plus"></i>Novo usuário';
+  document.getElementById('form-usuario-wrap').style.display='';
+  document.getElementById('ac-nome').focus();
+  document.getElementById('form-usuario-wrap').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+window.salvarUsuario=async function(){
+  const nome  =document.getElementById('ac-nome').value.trim();
+  const email =document.getElementById('ac-login').value.trim().toLowerCase();
+  const senha =document.getElementById('ac-senha').value;
+  const senha2=document.getElementById('ac-senha2').value;
+  const nivel =document.getElementById('ac-nivel').value;
+  const ativo =document.getElementById('ac-status').value==='ativo';
+  if(!nome||!email){toast('Nome e e-mail são obrigatórios','red');return;}
+  if(senha&&senha!==senha2){toast('Senhas não conferem','red');return;}
+  if(senha&&senha.length<6){toast('Senha mínimo 6 caracteres','red');return;}
+
+  if(editandoUserId){
+    // Atualiza perfil no Firestore
+    const upd={nome,nivel,ativo};
+    await fsSet('usuarios',editandoUserId,upd);
+    const idx=usuarios.findIndex(u=>u.id===editandoUserId);
+    if(idx>=0) usuarios[idx]={...usuarios[idx],...upd};
+    toast('Usuário atualizado ✓');
+  } else {
+    // Cria conta no Firebase Auth
+    if(!senha){toast('Informe uma senha','red');return;}
+    try{
+      const cred=await createUserWithEmailAndPassword(auth,email,senha);
+      await fsSet('usuarios',cred.user.uid,{nome,email,nivel,ativo,criado:ts(),ultimoAcesso:'—'});
+      usuarios.push({id:cred.user.uid,nome,email,nivel,ativo,criado:ts(),ultimoAcesso:'—'});
+      toast('Usuário cadastrado ✓ · E-mail: '+email);
+    }catch(e){
+      const msgs={'auth/email-already-in-use':'E-mail já cadastrado','auth/invalid-email':'E-mail inválido','auth/weak-password':'Senha muito fraca'};
+      toast(msgs[e.code]||'Erro: '+e.message,'red'); return;
+    }
+  }
+  cancelarEdicaoUsuario(); renderTabelaUsuarios();
+}
+
+window.editarUsuario=async function(id){
+  const user=usuarios.find(u=>u.id===id); if(!user)return;
+  editandoUserId=id;
+  document.getElementById('ac-nome').value=user.nome;
+  document.getElementById('ac-login').value=user.email||'';
+  document.getElementById('ac-senha').value='';
+  document.getElementById('ac-senha2').value='';
+  document.getElementById('ac-nivel').value=user.nivel;
+  document.getElementById('ac-status').value=user.ativo?'ativo':'inativo';
+  document.getElementById('ac-senha').placeholder='deixe vazio para não alterar';
+  document.getElementById('ac-senha-hint').textContent='(opcional)';
+  document.getElementById('form-usuario-title').innerHTML=`<i class="ti ti-pencil"></i>Editando: ${user.nome}`;
+  document.getElementById('form-usuario-wrap').style.display='';
+  document.getElementById('form-usuario-wrap').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+window.excluirUsuario=function(id){
+  if(id===usuarioAtual?.uid){toast('Não pode excluir o próprio usuário','red');return;}
+  const user=usuarios.find(u=>u.id===id);
+  openModal('Excluir usuário',`Excluir "${user?.nome}"? O acesso ao sistema será revogado.`,'Excluir',async()=>{
+    await fsDelete('usuarios',id);
+    usuarios=usuarios.filter(u=>u.id!==id);
+    renderTabelaUsuarios();
+    toast('Usuário excluído','amber');
+  });
+}
+
+window.toggleStatusUsuario=async function(id,ativoAtual){
+  if(id===usuarioAtual?.uid){toast('Não pode desativar o próprio usuário','red');return;}
+  const novoAtivo=!ativoAtual;
+  await fsSet('usuarios',id,{ativo:novoAtivo});
+  const idx=usuarios.findIndex(u=>u.id===id);
+  if(idx>=0) usuarios[idx].ativo=novoAtivo;
+  renderTabelaUsuarios();
+  toast(novoAtivo?'Usuário ativado ✓':'Usuário desativado','amber');
+}
+
+window.cancelarEdicaoUsuario=function(){
+  editandoUserId=null;
+  ['ac-nome','ac-login','ac-senha','ac-senha2'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('ac-nivel').value='operador';
+  document.getElementById('ac-status').value='ativo';
+  document.getElementById('ac-senha').placeholder='mínimo 6 caracteres';
+  document.getElementById('form-usuario-wrap').style.display='none';
+}
+
+async function renderTabelaUsuarios(){
+  const tbody=document.getElementById('tabela-usuarios'); if(!tbody) return;
+  tbody.innerHTML='<tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:16px">Carregando...</td></tr>';
+  usuarios=await fsGetAll('usuarios');
+  const isAdmin=usuarioAtual?.nivel==='admin';
+  tbody.innerHTML=usuarios.length?usuarios.map(u=>{
+    const isSelf=u.id===usuarioAtual?.uid;
+    return `<tr>
+      <td style="font-weight:600">${u.nome}${isSelf?' <span style="color:var(--cyan);font-size:10px">(você)</span>':''}</td>
+      <td style="font-family:var(--mono);color:var(--text-dim);font-size:12px">${u.email||u.login||'—'}</td>
+      <td><span class="nivel-badge nivel-${u.nivel}">${u.nivel}</span></td>
+      <td><span class="${u.ativo?'status-ativo':'status-inativo'}">${u.ativo?'● Ativo':'○ Inativo'}</span></td>
+      <td style="color:var(--text-dim);font-size:12px">${u.ultimoAcesso||'—'}</td>
+      <td><div class="action-btns">
+        ${isAdmin?`
+          <button class="hud-btn" style="padding:5px 9px" onclick="window.editarUsuario('${u.id}')">✎</button>
+          <button class="hud-btn amber" style="padding:5px 9px" onclick="window.toggleStatusUsuario('${u.id}',${u.ativo})">${u.ativo?'⏸':'▶'}</button>
+          ${!isSelf?`<button class="hud-btn danger" style="padding:5px 9px" onclick="window.excluirUsuario('${u.id}')">✕</button>`:''}
+        `:'<span style="color:var(--text-dim);font-size:11px">—</span>'}
+      </div></td>
+    </tr>`;
+  }).join(''):'<tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:20px">Nenhum usuário.</td></tr>';
+}
+
+</script>
+<style>
+:root{--bg:#050d1a;--bg2:#091628;--bg3:#0d1f35;--cyan:#00d4ff;--cyan-dim:#0088aa;--cyan-glow:rgba(0,212,255,0.15);--amber:#ffaa00;--red:#ff3b5c;--green:#00ff88;--text:#dff0f8;--text-dim:#6ba5bf;--border:rgba(0,212,255,0.2);--border-hi:rgba(0,212,255,0.6);--mono:'Share Tech Mono',monospace;--sans:'Exo 2',sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;overflow-x:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(0,212,255,0.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,0.03) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
+body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--cyan),transparent);opacity:0.4;animation:scanline 8s linear infinite;pointer-events:none;z-index:999}
+@keyframes scanline{to{top:200%}}
+.hud-corner{position:fixed;width:60px;height:60px;pointer-events:none;z-index:100}
+.hud-corner::before,.hud-corner::after{content:'';position:absolute;background:var(--cyan);opacity:0.5}
+.hud-corner.tl{top:12px;left:12px}.hud-corner.tr{top:12px;right:12px;transform:scaleX(-1)}.hud-corner.bl{bottom:12px;left:12px;transform:scaleY(-1)}.hud-corner.br{bottom:12px;right:12px;transform:scale(-1)}
+.hud-corner::before{top:0;left:0;width:2px;height:24px}.hud-corner::after{top:0;left:0;width:24px;height:2px}
+#app{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:0 16px 60px;display:none}
+#topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 0 10px;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap}
+.logo{font-family:var(--sans);font-size:20px;font-weight:700;color:var(--cyan);letter-spacing:4px;text-transform:uppercase}
+.logo span{color:var(--amber)}
+.sys-info{display:flex;gap:20px;font-size:11px;color:var(--text-dim);align-items:center;flex-wrap:wrap}
+.sys-info b{color:var(--cyan)}
+#clock{color:var(--amber);font-family:var(--mono)}
+#nav{display:flex;gap:2px;margin:16px 0 24px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.nav-btn{font-family:var(--sans);font-size:13px;font-weight:600;letter-spacing:1px;text-transform:uppercase;padding:10px 18px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim);cursor:pointer;transition:all 0.2s;white-space:nowrap;display:flex;align-items:center;gap:7px}
+.nav-btn:hover{color:var(--cyan);background:var(--cyan-glow)}.nav-btn.active{color:var(--cyan);border-bottom-color:var(--cyan);background:var(--cyan-glow)}.nav-btn .ti{font-size:17px}
+.panel{display:none;animation:fadein 0.3s ease}.panel.active{display:block}
+@keyframes fadein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.hud-card{background:var(--bg2);border:1px solid var(--border);border-radius:2px;padding:20px 24px;position:relative;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));margin-bottom:16px}
+.hud-card::before{content:'';position:absolute;top:0;right:0;width:0;height:0;border-style:solid;border-width:0 16px 16px 0;border-color:transparent var(--cyan-dim) transparent transparent;opacity:0.5}
+.hud-card-title{font-size:11px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase;margin-bottom:16px;display:flex;align-items:center;gap:8px;font-family:var(--sans);font-weight:700}
+.hud-card-title .ti{font-size:16px}.hud-card-title::before{content:'';width:16px;height:1px;background:var(--cyan)}
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+.stat-box{background:var(--bg3);border:1px solid var(--border);padding:14px 16px;position:relative;overflow:hidden}
+.stat-box::after{content:'';position:absolute;bottom:0;left:0;height:2px;background:var(--cyan);width:var(--w,60%);opacity:0.6}
+.stat-label{font-size:10px;letter-spacing:1.5px;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px;font-weight:600}
+.stat-value{font-size:26px;color:var(--cyan);font-weight:700;line-height:1}
+.stat-unit{font-size:12px;color:var(--text-dim);margin-top:2px}
+.hud-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}
+.field-group{display:flex;flex-direction:column;gap:6px}
+.field-label{font-size:11px;letter-spacing:1px;color:var(--cyan);text-transform:uppercase;font-weight:600}
+.hud-input,.hud-select{font-family:var(--sans);font-size:14px;background:var(--bg3);border:1px solid var(--border);border-radius:0;color:var(--text);padding:10px 12px;width:100%;outline:none;transition:border-color 0.2s,box-shadow 0.2s;appearance:none}
+.hud-input:focus,.hud-select:focus{border-color:var(--cyan);box-shadow:0 0 0 2px var(--cyan-glow)}
+.hud-select option{background:var(--bg2);color:var(--text)}.hud-input::placeholder{color:var(--text-dim)}
+.form-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;align-items:center}
+.hud-btn{font-family:var(--sans);font-size:12px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;padding:10px 18px;background:transparent;border:1px solid var(--cyan);color:var(--cyan);cursor:pointer;transition:all 0.2s;clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,8px 100%,0 calc(100% - 8px));white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.hud-btn .ti{font-size:15px}.hud-btn:hover{background:var(--cyan-glow);box-shadow:0 0 12px var(--cyan-glow)}
+.hud-btn.amber{border-color:var(--amber);color:var(--amber)}.hud-btn.amber:hover{background:rgba(255,170,0,0.1)}
+.hud-btn.danger{border-color:var(--red);color:var(--red)}.hud-btn.danger:hover{background:rgba(255,59,92,0.1)}
+.hud-btn.green-btn{border-color:var(--green);color:var(--green)}.hud-btn.green-btn:hover{background:rgba(0,255,136,0.08)}
+.hud-btn:disabled{opacity:0.3;cursor:not-allowed}
+.hud-table-wrap{overflow-x:auto;margin-top:8px}
+.hud-table{width:100%;border-collapse:collapse;font-size:13px;font-family:var(--sans)}
+.hud-table th{text-align:left;padding:8px 12px;font-size:10px;letter-spacing:1.5px;color:var(--cyan);text-transform:uppercase;font-weight:700;border-bottom:1px solid var(--border-hi);white-space:nowrap}
+.hud-table td{padding:10px 12px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle}
+.hud-table tr:hover td{background:var(--cyan-glow)}
+.gaveta-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border:1px solid var(--amber);color:var(--amber);font-size:11px;font-weight:600}
+.qty-low{color:var(--red)}.qty-ok{color:var(--green)}
+.action-btns{display:flex;gap:6px}
+.led{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 2s ease-in-out infinite;vertical-align:middle;margin-right:4px}
+.led.amber{background:var(--amber);box-shadow:0 0 6px var(--amber)}.led.red{background:var(--red);box-shadow:0 0 6px var(--red);animation:blink 0.5s ease-in-out infinite}.led.off{background:#333;box-shadow:none;animation:none}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.4}}
+#toast{position:fixed;bottom:30px;left:50%;transform:translateX(-50%);background:var(--bg2);border:1px solid var(--cyan);color:var(--cyan);padding:12px 28px;font-size:12px;font-weight:600;letter-spacing:1.5px;text-transform:uppercase;z-index:9999;opacity:0;transition:opacity 0.3s;pointer-events:none;white-space:nowrap;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,10px 100%,0 calc(100% - 10px))}
+#toast.show{opacity:1}#toast.amber{border-color:var(--amber);color:var(--amber)}#toast.red{border-color:var(--red);color:var(--red)}
+#modal-overlay{position:fixed;inset:0;background:rgba(5,13,26,0.88);z-index:5000;display:none;align-items:center;justify-content:center}
+#modal-overlay.open{display:flex}
+#modal-box{background:var(--bg2);border:1px solid var(--border-hi);padding:28px 32px;max-width:540px;width:90%;clip-path:polygon(0 0,calc(100% - 20px) 0,100% 20px,100% 100%,20px 100%,0 calc(100% - 20px))}
+.modal-title{font-size:12px;letter-spacing:2px;color:var(--amber);text-transform:uppercase;margin-bottom:14px;font-weight:700;display:flex;align-items:center;gap:8px}
+.modal-actions{display:flex;gap:10px;margin-top:20px;justify-content:flex-end}
+.log-list{display:flex;flex-direction:column;gap:6px;max-height:400px;overflow-y:auto}
+.log-item{display:flex;gap:12px;font-size:13px;padding:8px 12px;background:var(--bg3);border-left:2px solid var(--border);align-items:flex-start;font-family:var(--sans)}
+.log-item.entrada{border-left-color:var(--green)}.log-item.saida{border-left-color:var(--red)}.log-item.edit{border-left-color:var(--amber)}
+.log-time{color:var(--text-dim);white-space:nowrap;flex-shrink:0;font-size:11px}.log-desc{color:var(--text);flex:1;font-weight:500}.log-qty{color:var(--cyan);flex-shrink:0;font-weight:700}
+.search-wrap{display:flex;gap:10px;margin-bottom:16px}.search-wrap .hud-input{flex:1}
+.armario-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-bottom:24px}
+.armario-card{background:var(--bg2);border:1px solid var(--border);padding:0;position:relative;cursor:pointer;transition:border-color 0.2s,box-shadow 0.2s;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px))}
+.armario-card::before{content:'';position:absolute;top:0;right:0;width:0;height:0;border-style:solid;border-width:0 14px 14px 0;border-color:transparent var(--cyan-dim) transparent transparent;opacity:0.4}
+.armario-card:hover{border-color:var(--cyan);box-shadow:0 0 16px var(--cyan-glow)}
+.armario-header{padding:14px 16px 12px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.armario-nome{font-size:15px;font-weight:700;line-height:1.2}
+.armario-local{font-size:11px;color:var(--text-dim);margin-top:3px}
+.armario-actions{display:flex;gap:4px;flex-shrink:0}
+.icon-btn{background:transparent;border:1px solid var(--border);color:var(--text-dim);padding:5px 9px;cursor:pointer;font-size:15px;transition:all 0.2s;display:flex;align-items:center;line-height:1}
+.icon-btn:hover{border-color:var(--cyan);color:var(--cyan)}.icon-btn.danger:hover{border-color:var(--red);color:var(--red)}
+.armario-body{padding:14px 16px}
+.gavetas-row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.gav-chip{background:var(--bg3);border:1px solid var(--border);padding:8px 12px;font-size:12px;font-weight:600;color:var(--text-dim);display:flex;flex-direction:column;align-items:center;gap:3px;transition:all 0.2s;cursor:pointer;min-width:90px;max-width:160px;position:relative;text-align:center}
+.gav-chip:hover{border-color:var(--cyan);color:var(--cyan)}.gav-chip.selected-gav{border-color:var(--amber);color:var(--amber);background:rgba(255,170,0,0.06)}
+.gav-num{font-size:13px;font-weight:700;line-height:1}
+.gav-name{font-size:10px;font-weight:400;color:var(--text-dim);line-height:1.3;word-break:break-word;white-space:normal}
+.gav-chip:hover .gav-name{color:var(--cyan)}.gav-chip.selected-gav .gav-name{color:var(--amber)}
+.gav-count{font-size:10px;color:var(--text-dim);font-weight:400}
+.gav-alert{position:absolute;top:2px;right:2px;width:6px;height:6px;border-radius:50%;background:var(--red);box-shadow:0 0 4px var(--red)}
+.armario-meta{font-size:11px;color:var(--text-dim);display:flex;gap:12px;flex-wrap:wrap}
+#gaveta-detail{background:var(--bg2);border:1px solid var(--border-hi);padding:20px 24px;margin-bottom:24px;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));display:none;animation:fadein 0.3s ease}
+#gaveta-detail.open{display:block}
+.detail-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.detail-title{font-size:16px;font-weight:700;color:var(--amber);letter-spacing:1px}
+.detail-sub{font-size:12px;color:var(--text-dim)}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px}
+#voice-panel-wrap{display:flex;flex-direction:column;align-items:center;padding:40px 20px 20px;gap:28px}
+#radar-wrap{position:relative;width:240px;height:240px}
+#radar-svg{width:100%;height:100%}
+.radar-ring{fill:none;stroke:var(--cyan);stroke-width:0.5;opacity:0.2}
+.radar-spoke{stroke:var(--cyan);stroke-width:0.5;opacity:0.15}
+#radar-sweep{transform-origin:120px 120px;animation:sweep 3s linear infinite;opacity:0;transition:opacity 0.5s}
+@keyframes sweep{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+#radar-sweep.active{opacity:1}
+#voice-ring-outer{position:absolute;inset:10px;border-radius:50%;border:1px solid var(--cyan);opacity:0.3;animation:pulseRing 2s ease-in-out infinite}
+#voice-ring-inner{position:absolute;inset:30px;border-radius:50%;border:1px solid var(--cyan);opacity:0;animation:pulseRing 2s ease-in-out infinite 0.5s}
+@keyframes pulseRing{0%,100%{transform:scale(1);opacity:0.3}50%{transform:scale(1.05);opacity:0.6}}
+#mic-btn{position:absolute;inset:60px;border-radius:50%;background:var(--bg3);border:2px solid var(--border-hi);color:var(--cyan);font-size:36px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.3s;z-index:2}
+#mic-btn:hover{border-color:var(--cyan);box-shadow:0 0 20px var(--cyan-glow)}
+#mic-btn.listening{border-color:var(--red);box-shadow:0 0 30px rgba(255,59,92,0.3);animation:micPulse 0.8s ease-in-out infinite}
+@keyframes micPulse{0%,100%{box-shadow:0 0 20px rgba(255,59,92,0.3)}50%{box-shadow:0 0 40px rgba(255,59,92,0.6)}}
+#voice-status{font-size:11px;letter-spacing:2px;color:var(--text-dim);text-transform:uppercase;text-align:center}
+#voice-transcript{font-size:20px;color:var(--cyan);text-align:center;min-height:28px;letter-spacing:1px;font-weight:300}
+.gaveta-display{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin-top:12px}
+.gd-box{background:var(--bg3);border:1px solid var(--border);padding:14px 12px;text-align:center;transition:all 0.4s;position:relative;min-width:80px}
+.gd-box.lit{border-color:var(--amber);box-shadow:0 0 20px rgba(255,170,0,0.4);background:rgba(255,170,0,0.05)}
+.gd-num{font-size:20px;font-weight:700;color:var(--text-dim);transition:color 0.4s}.gd-box.lit .gd-num{color:var(--amber)}
+.gd-label{font-size:9px;letter-spacing:1px;color:var(--text-dim);margin-top:2px;text-transform:uppercase}
+.gd-box .gd-led{width:10px;height:10px;border-radius:50%;background:#1a2030;margin:6px auto 0;transition:all 0.4s}
+.gd-box.lit .gd-led{background:var(--amber);box-shadow:0 0 10px var(--amber);animation:blink 0.6s ease-in-out infinite}
+.nivel-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;font-size:11px;font-weight:600;border-radius:2px;letter-spacing:1px;text-transform:uppercase}
+.nivel-admin{background:rgba(255,59,92,0.15);color:var(--red);border:1px solid rgba(255,59,92,0.3)}
+.nivel-operador{background:rgba(0,212,255,0.12);color:var(--cyan);border:1px solid rgba(0,212,255,0.3)}
+.nivel-consulta{background:rgba(0,255,136,0.1);color:var(--green);border:1px solid rgba(0,255,136,0.2)}
+.status-ativo{color:var(--green);font-size:12px;font-weight:600}.status-inativo{color:var(--text-dim);font-size:12px}
+#user-info-bar{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--text-dim)}
+::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:var(--bg)}::-webkit-scrollbar-thumb{background:var(--cyan-dim)}
+@media(max-width:700px){.two-col{grid-template-columns:1fr}.armario-grid{grid-template-columns:1fr}.hud-form{grid-template-columns:1fr}.sys-info{display:none}.nav-btn{padding:9px 10px;font-size:11px}}
+</style>
+</head>
+<body>
+<div class="hud-corner tl"></div><div class="hud-corner tr"></div>
+<div class="hud-corner bl"></div><div class="hud-corner br"></div>
+
+<!-- LOGIN -->
+<div id="login-overlay" style="position:fixed;inset:0;background:var(--bg);z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center">
+  <div style="position:absolute;inset:0;background-image:linear-gradient(rgba(0,212,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,0.04) 1px,transparent 1px);background-size:40px 40px;pointer-events:none"></div>
+  <div style="position:relative;width:100%;max-width:400px;padding:0 24px">
+    <div style="text-align:center;margin-bottom:36px">
+      <div style="font-family:var(--sans);font-size:30px;font-weight:700;color:var(--cyan);letter-spacing:6px;text-transform:uppercase">ORI<span style="color:var(--amber)">ON</span></div>
+      <div style="font-size:11px;color:var(--text-dim);letter-spacing:3px;margin-top:6px;text-transform:uppercase">Sistema de Organização Inteligente</div>
+      <div style="width:60px;height:1px;background:var(--cyan);margin:14px auto 0;opacity:0.4"></div>
+    </div>
+    <div style="background:var(--bg2);border:1px solid var(--border);padding:28px;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));position:relative">
+      <div style="position:absolute;top:0;right:0;width:0;height:0;border-style:solid;border-width:0 16px 16px 0;border-color:transparent var(--cyan-dim) transparent transparent;opacity:0.5"></div>
+      <div style="font-size:10px;letter-spacing:3px;color:var(--cyan);text-transform:uppercase;font-weight:700;margin-bottom:20px"><i class="ti ti-lock" style="margin-right:6px"></i>Identificação requerida</div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="field-group"><label class="field-label">E-mail</label>
+          <input class="hud-input" id="login-user" type="email" placeholder="seu@email.com" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
+        </div>
+        <div class="field-group"><label class="field-label">Senha</label>
+          <div style="position:relative">
+            <input class="hud-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')fazerLogin()" style="padding-right:44px">
+            <button onclick="window.toggleSenhaLogin()" id="btn-toggle-pass" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px"><i class="ti ti-eye"></i></button>
+          </div>
+        </div>
+        <div id="login-erro" style="font-size:12px;color:var(--red);display:none;text-align:center;letter-spacing:1px"></div>
+        <button class="hud-btn" onclick="window.fazerLogin()" style="width:100%;justify-content:center;padding:13px"><i class="ti ti-login"></i>Entrar no sistema</button>
+
+        <div style="display:flex;align-items:center;gap:10px;margin:4px 0">
+          <div style="flex:1;height:1px;background:var(--border)"></div>
+          <span style="font-size:10px;color:var(--text-dim);letter-spacing:1px">OU</span>
+          <div style="flex:1;height:1px;background:var(--border)"></div>
+        </div>
+
+        <button onclick="window.loginGoogle()" style="
+          width:100%;padding:12px;background:white;border:none;border-radius:2px;
+          display:flex;align-items:center;justify-content:center;gap:10px;
+          font-family:var(--sans);font-size:13px;font-weight:600;
+          color:#3c4043;cursor:pointer;transition:box-shadow 0.2s;letter-spacing:0.5px;
+        " onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.3)'" onmouseout="this.style.boxShadow='none'">
+          <svg width="18" height="18" viewBox="0 0 48 48">
+            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+            <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+          </svg>
+          Entrar com Google
+        </button>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:16px;font-size:10px;color:var(--text-dim);letter-spacing:1px">Acesso restrito · ORION v1.0 · Firebase</div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+<div id="topbar">
+  <div class="logo">ORI<span>ON</span> <span style="font-size:11px;opacity:0.4;letter-spacing:2px;color:var(--text-dim)">v1.0</span></div>
+  <div class="sys-info">
+    <div><span class="led"></span> ONLINE</div>
+    <div>▣ ARMÁRIOS: <b id="total-arm-disp">0</b></div>
+    <div>≡ GAVETAS: <b id="total-gav-disp">0</b></div>
+    <div>◈ ESP32: <b id="esp32-status" style="color:var(--text-dim)">OFFLINE</b></div>
+    <div>◷ <span id="clock"></span></div>
+  </div>
+  <div id="user-info-bar" style="display:none">
+    <i class="ti ti-user-circle" style="font-size:15px"></i>
+    <span id="user-nome-disp"></span>
+    <span id="user-nivel-disp"></span>
+    <button class="hud-btn danger" style="padding:4px 10px;font-size:10px;margin-left:4px" onclick="window.fazerLogout()"><i class="ti ti-logout"></i>Sair</button>
+  </div>
+</div>
+<nav id="nav">
+  <button class="nav-btn active" onclick="window.showPanel('dashboard')" data-panel="dashboard"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
+  <button class="nav-btn" onclick="window.showPanel('armarios')" data-panel="armarios"><i class="ti ti-building-warehouse"></i>Armários</button>
+  <button class="nav-btn" onclick="window.showPanel('itens')" data-panel="itens"><i class="ti ti-package"></i>Itens</button>
+  <button class="nav-btn" onclick="window.showPanel('movimentos')" data-panel="movimentos"><i class="ti ti-arrows-exchange"></i>Movimentos</button>
+  <button class="nav-btn" onclick="window.showPanel('historico')" data-panel="historico"><i class="ti ti-report-analytics"></i>Histórico</button>
+  <button class="nav-btn" onclick="window.showPanel('voz')" data-panel="voz"><i class="ti ti-microphone"></i>Comando de Voz</button>
+  <button class="nav-btn" onclick="window.showPanel('esp32')" data-panel="esp32"><i class="ti ti-cpu"></i>ESP32</button>
+  <button class="nav-btn" onclick="window.showPanel('acesso')" data-panel="acesso"><i class="ti ti-shield-lock"></i>Acesso</button>
+</nav>
+
+<!-- DASHBOARD -->
+<div id="panel-dashboard" class="panel active">
+  <div class="stat-row" id="stats-row"></div>
+  <div class="two-col">
+    <div class="hud-card"><div class="hud-card-title"><i class="ti ti-building-warehouse"></i>Armários</div><div id="dash-arm-list"></div></div>
+    <div class="hud-card"><div class="hud-card-title"><i class="ti ti-history"></i>Últimas movimentações</div><div class="log-list" id="dash-log" style="max-height:260px"></div></div>
+  </div>
+  <div class="hud-card"><div class="hud-card-title"><i class="ti ti-alert-triangle"></i>Estoque crítico</div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Item</th><th>Armário</th><th>Gaveta</th><th>Qtd</th><th>Mín</th><th>Ação</th></tr></thead><tbody id="low-stock-body"></tbody></table></div>
+  </div>
+</div>
+
+<!-- ARMÁRIOS -->
+<div id="panel-armarios" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title" id="arm-form-title">+ Adicionar armário</div>
+    <div class="hud-form">
+      <div class="field-group"><label class="field-label">Nome do armário</label><input class="hud-input" id="arm-nome" placeholder="ex: Oficina Principal"></div>
+      <div class="field-group"><label class="field-label">Localização</label><input class="hud-input" id="arm-local" placeholder="ex: Garagem"></div>
+      <div class="field-group"><label class="field-label">Número de gavetas</label><input class="hud-input" id="arm-ngav" type="number" min="1" max="30" value="5"></div>
+      <div class="field-group"><label class="field-label">Cor</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="hud-input" id="arm-cor" type="color" value="#00d4ff" style="width:56px;padding:4px;cursor:pointer;height:42px">
+          <span id="arm-cor-preview" style="font-size:12px;color:var(--text-dim)">Ciano padrão</span>
+        </div>
+      </div>
+    </div>
+    <div id="gav-names-wrap" style="margin-top:16px;display:none">
+      <div style="font-size:11px;color:var(--cyan);letter-spacing:1px;text-transform:uppercase;font-weight:600;margin-bottom:10px">Nomes das gavetas (opcional)</div>
+      <div id="gav-names-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px"></div>
+    </div>
+    <div class="form-actions">
+      <button class="hud-btn" onclick="window.salvarArmario()"><i class="ti ti-device-floppy"></i>Salvar armário</button>
+      <button class="hud-btn amber" id="btn-cancel-arm" onclick="window.cancelarArmario()" style="display:none"><i class="ti ti-x"></i>Cancelar</button>
+    </div>
+  </div>
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title"><i class="ti ti-building-warehouse"></i>Seus armários</div>
+    <div class="armario-grid" id="armario-grid"></div>
+    <div id="arm-empty" style="display:none;padding:24px;text-align:center;color:var(--text-dim)">Nenhum armário cadastrado.</div>
+  </div>
+  <div id="gaveta-detail">
+    <div class="detail-header">
+      <div><div class="detail-title" id="detail-title"></div><div class="detail-sub" id="detail-sub"></div></div>
+      <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap">
+        <button class="hud-btn" onclick="window.abrirFormItem(null,currentArmId,currentGavId)"><i class="ti ti-plus"></i>Novo item aqui</button>
+        <button class="hud-btn amber" onclick="window.fecharDetalhe()"><i class="ti ti-x"></i>Fechar</button>
+      </div>
+    </div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Item</th><th>Qtd</th><th>Mín</th><th>Preço</th><th>Categoria</th><th>Ações</th></tr></thead><tbody id="detail-tbody"></tbody></table></div>
+  </div>
+</div>
+
+<!-- ITENS -->
+<div id="panel-itens" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title" id="form-title-itens">+ Cadastrar item</div>
+    <div class="hud-form">
+      <div class="field-group"><label class="field-label">Nome do item</label><input class="hud-input" id="f-nome" placeholder="ex: chave de fenda" autocomplete="off"></div>
+      <div class="field-group"><label class="field-label">Armário</label><select class="hud-select" id="f-armario" onchange="populateGavetasSelect(this.value,'f-gaveta','')"></select></div>
+      <div class="field-group"><label class="field-label">Gaveta</label><select class="hud-select" id="f-gaveta"></select></div>
+      <div class="field-group"><label class="field-label">Quantidade inicial</label><input class="hud-input" id="f-qty" type="number" min="0" placeholder="0"></div>
+      <div class="field-group"><label class="field-label">Qtd mínima (alerta)</label><input class="hud-input" id="f-min" type="number" min="0" placeholder="1"></div>
+      <div class="field-group"><label class="field-label">Preço unitário (R$)</label><input class="hud-input" id="f-preco" type="number" step="0.01" min="0" placeholder="0.00"></div>
+      <div class="field-group"><label class="field-label">Categoria</label><input class="hud-input" id="f-cat" placeholder="ex: ferramentas" autocomplete="off"></div>
+    </div>
+    <div class="form-actions">
+      <button class="hud-btn" onclick="window.salvarItem()"><i class="ti ti-device-floppy"></i>Salvar item</button>
+      <button class="hud-btn amber" onclick="window.cancelarEdicaoItem()" id="btn-cancelar-edit" style="display:none"><i class="ti ti-x"></i>Cancelar</button>
+    </div>
+  </div>
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title"><i class="ti ti-list"></i>Itens cadastrados</div>
+    <div class="search-wrap">
+      <input class="hud-input" id="search-itens" placeholder="Buscar..." oninput="renderTabela()">
+      <select class="hud-select" id="filter-arm" style="width:180px"><option value="">Todos os armários</option></select>
+      <select class="hud-select" id="filter-gav" style="width:130px"><option value="">Todas as gavetas</option></select>
+    </div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Nome</th><th>Armário</th><th>Gaveta</th><th>Qtd</th><th>Mín</th><th>Preço</th><th>Categoria</th><th>Ações</th></tr></thead><tbody id="tabela-itens"></tbody></table></div>
+  </div>
+</div>
+
+<!-- MOVIMENTOS -->
+<div id="panel-movimentos" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-transfer-in"></i>Registrar movimentação</div>
+    <div class="hud-form">
+      <div class="field-group" style="grid-column:span 2"><label class="field-label">Item</label><select class="hud-select" id="mov-item"></select></div>
+      <div class="field-group"><label class="field-label">Tipo</label><select class="hud-select" id="mov-tipo"><option value="entrada">Entrada</option><option value="saida">Saída</option></select></div>
+      <div class="field-group"><label class="field-label">Quantidade</label><input class="hud-input" id="mov-qty" type="number" min="1" placeholder="1"></div>
+      <div class="field-group" style="grid-column:span 2"><label class="field-label">Observação</label><input class="hud-input" id="mov-obs" placeholder="opcional..."></div>
+    </div>
+    <div class="form-actions"><button class="hud-btn green-btn" onclick="window.registrarMovimento()"><i class="ti ti-check"></i>Registrar</button></div>
+  </div>
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title" style="justify-content:space-between">
+      <span style="display:flex;align-items:center;gap:8px"><i class="ti ti-clock"></i>Histórico</span>
+      <button class="hud-btn danger" style="padding:5px 14px;font-size:11px" onclick="window.limparHistorico()"><i class="ti ti-trash"></i>Limpar</button>
+    </div>
+    <div class="log-list" id="mov-log"></div>
+  </div>
+</div>
+
+<!-- HISTÓRICO -->
+<div id="panel-historico" class="panel">
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title"><i class="ti ti-table"></i>Relatório de estoque</div>
+    <div class="search-wrap">
+      <input class="hud-input" id="hist-search" placeholder="Filtrar..." oninput="renderHistorico()">
+      <select class="hud-select" id="hist-arm" onchange="renderHistorico()" style="width:180px"><option value="">Todos os armários</option></select>
+    </div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Item</th><th>Armário</th><th>Gaveta</th><th>Categoria</th><th>Qtd</th><th>Mín</th><th>Preço</th><th>Valor total</th><th>Status</th></tr></thead><tbody id="hist-body"></tbody></table></div>
+    <div style="margin-top:16px;display:flex;gap:24px;font-size:12px;color:var(--text-dim);flex-wrap:wrap" id="hist-totais"></div>
+  </div>
+</div>
+
+<!-- VOZ -->
+<div id="panel-voz" class="panel">
+  <div id="voice-panel-wrap">
+    <div style="text-align:center">
+      <div style="font-size:10px;letter-spacing:3px;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px">Sistema de localização por voz</div>
+      <div style="font-size:13px;color:var(--text);max-width:440px;line-height:1.6">Fale o nome do item. O sistema localiza em qual armário e gaveta ele está.</div>
+    </div>
+    <div id="radar-wrap">
+      <svg id="radar-svg" viewBox="0 0 240 240">
+        <circle cx="120" cy="120" r="100" class="radar-ring"/><circle cx="120" cy="120" r="75" class="radar-ring"/><circle cx="120" cy="120" r="50" class="radar-ring"/><circle cx="120" cy="120" r="25" class="radar-ring"/>
+        <line x1="120" y1="20" x2="120" y2="220" class="radar-spoke"/><line x1="20" y1="120" x2="220" y2="120" class="radar-spoke"/><line x1="50" y1="50" x2="190" y2="190" class="radar-spoke"/><line x1="190" y1="50" x2="50" y2="190" class="radar-spoke"/>
+        <g id="radar-sweep">
+          <defs><radialGradient id="sweepGrad" cx="0%" cy="50%" r="100%"><stop offset="0%" stop-color="var(--cyan)" stop-opacity="0"/><stop offset="100%" stop-color="var(--cyan)" stop-opacity="0.35"/></radialGradient></defs>
+          <path d="M120 120 L220 120 A100 100 0 0 0 120 20 Z" fill="url(#sweepGrad)"/>
+          <line x1="120" y1="120" x2="220" y2="120" stroke="var(--cyan)" stroke-width="1" opacity="0.7"/>
+        </g>
+      </svg>
+      <div id="voice-ring-outer"></div><div id="voice-ring-inner"></div>
+      <button id="mic-btn" onclick="window.toggleVoz()">🎤</button>
+    </div>
+    <div id="voice-status">Clique no microfone para iniciar</div>
+    <div id="voice-transcript">—</div>
+    <div id="voice-result" style="width:100%;max-width:640px;display:none">
+      <div class="hud-card">
+        <div class="hud-card-title" id="vr-title">◉ Aguardando</div>
+        <div id="vr-content"></div>
+        <div class="gaveta-display" id="gaveta-display" style="margin-top:16px"></div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--text-dim);text-align:center;letter-spacing:1px">⚠ Requer HTTPS · Chrome · Microfone habilitado</div>
+  </div>
+</div>
+
+<!-- ESP32 -->
+<div id="panel-esp32" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-wifi"></i>Conexão com o ESP32</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      <div class="field-group"><label class="field-label">IP do ESP32</label><input class="hud-input" id="esp-ip" placeholder="192.168.1.50" value="192.168.1.50" style="width:180px"></div>
+      <div class="field-group"><label class="field-label">Porta</label><input class="hud-input" id="esp-porta" placeholder="80" value="80" style="width:80px"></div>
+      <div class="form-actions" style="margin-top:0">
+        <button class="hud-btn" onclick="window.testarConexao()"><i class="ti ti-wifi"></i>Testar</button>
+        <button class="hud-btn amber" onclick="window.testarLeds()"><i class="ti ti-bulb"></i>Testar LEDs</button>
+        <button class="hud-btn danger" onclick="window.fecharTodasTravas()"><i class="ti ti-lock"></i>Fechar travas</button>
+      </div>
+    </div>
+    <div id="esp-conn-status" style="margin-top:12px;font-size:13px;color:var(--text-dim)"><span class="led off"></span> Não testado</div>
+  </div>
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-settings"></i>Mapeamento de pinos GPIO</div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center">
+      <label class="field-label" style="margin:0;white-space:nowrap">Armário:</label>
+      <select class="hud-select" id="esp-arm-sel" onchange="renderPinosForm()" style="max-width:220px"></select>
+    </div>
+    <div id="pinos-form"></div>
+    <div class="form-actions" style="margin-top:20px">
+      <button class="hud-btn" onclick="enviarConfigESP32()"><i class="ti ti-upload"></i>Enviar ao ESP32</button>
+      <button class="hud-btn amber" onclick="window.salvarPinosLocal()"><i class="ti ti-device-floppy"></i>Salvar local</button>
+    </div>
+  </div>
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-hand-click"></i>Controle manual</div>
+    <div id="manual-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px"></div>
+  </div>
+</div>
+
+<!-- ACESSO -->
+<div id="panel-acesso" class="panel">
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title" style="justify-content:space-between">
+      <span style="display:flex;align-items:center;gap:8px"><i class="ti ti-users"></i>Usuários cadastrados</span>
+      <button class="hud-btn green-btn" onclick="window.abrirFormUsuario()" style="padding:6px 14px;font-size:11px"><i class="ti ti-user-plus"></i>Novo usuário</button>
+    </div>
+    <div class="hud-table-wrap">
+      <table class="hud-table"><thead><tr><th>Nome</th><th>E-mail</th><th>Nível</th><th>Status</th><th>Último acesso</th><th>Ações</th></tr></thead><tbody id="tabela-usuarios"></tbody></table>
+    </div>
+  </div>
+  <div id="form-usuario-wrap" style="display:none;animation:fadein 0.25s ease;margin-top:16px">
+    <div class="hud-card" style="border-color:var(--border-hi);margin-bottom:0">
+      <div class="hud-card-title" style="justify-content:space-between">
+        <span id="form-usuario-title" style="display:flex;align-items:center;gap:8px"><i class="ti ti-user-plus"></i>Novo usuário</span>
+        <button class="icon-btn danger" onclick="window.cancelarEdicaoUsuario()" style="font-size:16px">✕</button>
+      </div>
+      <div class="hud-form">
+        <div class="field-group"><label class="field-label">Nome completo</label><input class="hud-input" id="ac-nome" placeholder="ex: João Silva" autocomplete="off"></div>
+        <div class="field-group"><label class="field-label">E-mail (login)</label><input class="hud-input" id="ac-login" type="email" placeholder="joao@email.com" autocomplete="off"></div>
+        <div class="field-group"><label class="field-label">Senha <span id="ac-senha-hint" style="color:var(--text-dim);font-size:10px;font-weight:400"></span></label><input class="hud-input" id="ac-senha" type="password" placeholder="mínimo 6 caracteres"></div>
+        <div class="field-group"><label class="field-label">Confirmar senha</label><input class="hud-input" id="ac-senha2" type="password" placeholder="repita a senha"></div>
+        <div class="field-group"><label class="field-label">Nível de acesso</label>
+          <select class="hud-select" id="ac-nivel">
+            <option value="admin">Admin — acesso total</option>
+            <option value="operador" selected>Operador — ver + movimentos</option>
+            <option value="consulta">Consulta — somente leitura</option>
+          </select>
+        </div>
+        <div class="field-group"><label class="field-label">Status</label>
+          <select class="hud-select" id="ac-status"><option value="ativo">Ativo</option><option value="inativo">Inativo</option></select>
+        </div>
+      </div>
+      <div class="form-actions" style="margin-top:16px">
+        <button class="hud-btn" onclick="window.salvarUsuario()"><i class="ti ti-device-floppy"></i>Salvar usuário</button>
+        <button class="hud-btn amber" onclick="window.cancelarEdicaoUsuario()"><i class="ti ti-x"></i>Cancelar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /app -->
+<div id="toast"></div>
+<div id="modal-overlay">
+  <div id="modal-box">
+    <div class="modal-title"><i class="ti ti-alert-triangle"></i><span id="modal-title-txt">Confirmar</span></div>
+    <div id="modal-msg" style="font-size:14px;color:var(--text);line-height:1.7"></div>
+    <div class="modal-actions">
+      <button class="hud-btn" onclick="window.closeModal()"><i class="ti ti-x"></i>Cancelar</button>
+      <button class="hud-btn danger" id="modal-confirm-btn">Confirmar</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
