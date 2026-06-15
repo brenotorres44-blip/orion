@@ -232,10 +232,58 @@ function mostrarApp() {
   document.getElementById('app').style.display = 'flex';
   const bar = document.getElementById('user-info-bar');
   bar.style.display = 'flex';
+
+  // Avatar com iniciais
+  const iniciais = (usuarioAtual.nome||'?').split(' ').map(p=>p[0]).slice(0,2).join('').toUpperCase();
+  const av = document.getElementById('user-avatar');
+  if(av) av.textContent = iniciais;
+
   document.getElementById('user-nome-disp').textContent = usuarioAtual.nome;
-  document.getElementById('user-nivel-disp').innerHTML = `<span class="nivel-badge nivel-${usuarioAtual.nivel}">${usuarioAtual.nivel}</span>`;
+  document.getElementById('user-nivel-disp').textContent = '★ ' + (usuarioAtual.nivel||'').toUpperCase();
+
+  // Mostra alternador de modo só para admins reais
+  const nivelReal = usuarioAtual.nivelReal || usuarioAtual.nivel;
+  usuarioAtual.nivelReal = nivelReal; // guarda nível original
+  if(nivelReal === 'admin') {
+    const mt = document.getElementById('modo-toggle');
+    if(mt) mt.style.display = 'flex';
+    atualizarBotoesModo(usuarioAtual.nivel);
+  }
+
   aplicarPermissoesNav();
   carregarDados().then(() => showPanel('home'));
+}
+
+window.alternarModo = function(modo) {
+  if(!usuarioAtual) return;
+  if(usuarioAtual.nivelReal !== 'admin') { toast('Sem permissão para alternar modo', 'red'); return; }
+  usuarioAtual.nivel = modo;
+  document.getElementById('user-nivel-disp').textContent = '★ ' + modo.toUpperCase();
+  atualizarBotoesModo(modo);
+  aplicarPermissoesNav();
+  showPanel('home');
+  toast(`Modo ${modo.toUpperCase()} ativado`, modo==='admin' ? 'red' : '');
+}
+
+function atualizarBotoesModo(modo) {
+  const btnAdmin = document.getElementById('btn-modo-admin');
+  const btnOp    = document.getElementById('btn-modo-op');
+  if(!btnAdmin || !btnOp) return;
+  if(modo === 'admin') {
+    btnAdmin.style.background = 'rgba(255,59,92,0.25)';
+    btnAdmin.style.color      = 'var(--red)';
+    btnAdmin.style.borderColor= 'rgba(255,59,92,0.7)';
+    btnOp.style.background    = 'transparent';
+    btnOp.style.color         = 'var(--text-dim)';
+    btnOp.style.borderColor   = 'rgba(0,212,255,0.2)';
+  } else {
+    btnOp.style.background    = 'rgba(0,212,255,0.15)';
+    btnOp.style.color         = 'var(--cyan)';
+    btnOp.style.borderColor   = 'rgba(0,212,255,0.6)';
+    btnAdmin.style.background = 'transparent';
+    btnAdmin.style.color      = 'var(--text-dim)';
+    btnAdmin.style.borderColor= 'rgba(255,59,92,0.2)';
+  }
 }
 
 function mostrarLogin() {
@@ -275,6 +323,12 @@ async function carregarDados() {
 // ══════════════════════════════════════════════
 //  NAVEGAÇÃO
 // ══════════════════════════════════════════════
+const PANEL_NAMES = {
+  home:'INÍCIO', dashboard:'DASHBOARD', armarios:'ARMÁRIOS', itens:'ITENS',
+  movimentos:'MOVIMENTOS', historico:'HISTÓRICO', voz:'COMANDO DE VOZ',
+  esp32:'ESP32', acesso:'ACESSO'
+};
+
 window.showPanel = function(id) {
   if(usuarioAtual && !podeAcessar(id) && id !== 'home') { toast('Sem permissão','red'); return; }
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -283,6 +337,9 @@ window.showPanel = function(id) {
   const btn   = document.querySelector(`[data-panel="${id}"]`);
   if(panel) panel.classList.add('active');
   if(btn)   btn.classList.add('active');
+  // Atualiza breadcrumb
+  const bc = document.getElementById('breadcrumb-atual');
+  if(bc) bc.textContent = PANEL_NAMES[id] || id.toUpperCase();
   if(id==='home')       renderHome();
   if(id==='dashboard')  renderDashboard();
   if(id==='armarios')   renderArmarios();
@@ -1201,7 +1258,9 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
 .hud-corner.tl{top:12px;left:12px}.hud-corner.tr{top:12px;right:12px;transform:scaleX(-1)}.hud-corner.bl{bottom:12px;left:12px;transform:scaleY(-1)}.hud-corner.br{bottom:12px;right:12px;transform:scale(-1)}
 .hud-corner::before{top:0;left:0;width:2px;height:24px}.hud-corner::after{top:0;left:0;width:24px;height:2px}
 #app{position:relative;z-index:1;display:none;flex-direction:column;height:100vh;overflow:hidden}
-#topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap;flex-shrink:0;background:var(--bg2)}
+#topbar{display:flex;flex-direction:column;flex-shrink:0;background:var(--bg2);border-bottom:1px solid var(--border)}
+.logo{font-family:var(--sans);font-size:18px;font-weight:700;color:var(--cyan);letter-spacing:5px;text-transform:uppercase}
+.logo span{color:var(--amber)}
 #main-layout{display:flex;flex:1;overflow:hidden}
 #sidebar{width:110px;flex-shrink:0;background:#030912;border-right:1px solid var(--border);display:flex;flex-direction:column;padding:12px 0;gap:2px;overflow-y:auto}
 .side-btn{display:flex;flex-direction:column;align-items:center;gap:5px;padding:12px 6px;background:transparent;border:none;border-left:3px solid transparent;color:var(--text-dim);cursor:pointer;transition:all 0.2s;width:100%;font-family:var(--sans)}
@@ -1390,22 +1449,50 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
 <!-- APP -->
 <div id="app">
 
-<!-- TOPBAR -->
-<div id="topbar">
-  <div class="logo" onclick="window.showPanel('home')" style="cursor:pointer" title="Ir para início">ORI<span>ON</span> <span style="font-size:11px;opacity:0.4;letter-spacing:2px;color:var(--text-dim)">v1.0</span></div>
-  <div class="sys-info">
-    <div><span class="led"></span> ONLINE</div>
-    <div>▣ ARMÁRIOS: <b id="total-arm-disp">0</b></div>
-    <div>≡ GAVETAS: <b id="total-gav-disp">0</b></div>
-    <div>◈ ESP32: <b id="esp32-status" style="color:var(--text-dim)">OFFLINE</b></div>
-    <div>◷ <span id="clock"></span></div>
+<!-- TOPBAR CONCEITO 3 — Duplo nível -->
+<div id="topbar" style="padding:0;flex-direction:column">
+
+  <!-- Linha 1: Logo + usuário -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 20px;border-bottom:1px solid rgba(0,212,255,0.1)">
+    <div style="display:flex;align-items:center;gap:0">
+      <div class="logo" onclick="window.showPanel('home')" style="cursor:pointer;font-size:18px;letter-spacing:5px" title="Ir para início">ORI<span>ON</span></div>
+      <div style="font-size:9px;color:var(--text-dim);letter-spacing:2px;text-transform:uppercase;margin-left:12px;padding-left:12px;border-left:1px solid rgba(0,212,255,0.2)">Sistema de Organização Inteligente</div>
+    </div>
+    <div id="user-info-bar" style="display:none;align-items:center;gap:14px">
+      <!-- Alternador de modo (só para admin) -->
+      <div id="modo-toggle" style="display:none;align-items:center;gap:8px;background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.2);padding:4px 10px">
+        <span style="font-size:9px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Modo:</span>
+        <button id="btn-modo-admin" onclick="window.alternarModo('admin')" style="font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:3px 10px;border:1px solid rgba(255,59,92,0.5);background:rgba(255,59,92,0.15);color:var(--red);cursor:pointer;font-family:var(--sans);font-weight:700;transition:all 0.2s">ADMIN</button>
+        <button id="btn-modo-op" onclick="window.alternarModo('operador')" style="font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:3px 10px;border:1px solid rgba(0,212,255,0.2);background:transparent;color:var(--text-dim);cursor:pointer;font-family:var(--sans);font-weight:700;transition:all 0.2s">OPERADOR</button>
+      </div>
+      <!-- Avatar + nome -->
+      <div style="display:flex;align-items:center;gap:8px">
+        <div id="user-avatar" style="width:30px;height:30px;border-radius:50%;background:rgba(255,170,0,0.15);border:1px solid rgba(255,170,0,0.4);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--amber)">BT</div>
+        <div style="line-height:1.3">
+          <div id="user-nome-disp" style="font-size:11px;color:var(--text);font-weight:600"></div>
+          <div id="user-nivel-disp" style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase"></div>
+        </div>
+      </div>
+      <button class="hud-btn danger" style="padding:4px 12px;font-size:10px" onclick="window.fazerLogout()"><i class="ti ti-logout"></i>Sair</button>
+    </div>
   </div>
-  <div id="user-info-bar" style="display:none">
-    <i class="ti ti-user-circle" style="font-size:15px"></i>
-    <span id="user-nome-disp"></span>
-    <span id="user-nivel-disp"></span>
-    <button class="hud-btn danger" style="padding:4px 10px;font-size:10px;margin-left:4px" onclick="window.fazerLogout()"><i class="ti ti-logout"></i>Sair</button>
+
+  <!-- Linha 2: Breadcrumb + indicadores -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 20px;background:rgba(0,0,0,0.25)">
+    <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text-dim);letter-spacing:1px">
+      <span style="cursor:pointer;color:var(--cyan)" onclick="window.showPanel('home')">ORION</span>
+      <span style="color:rgba(0,212,255,0.3)">›</span>
+      <span id="breadcrumb-atual" style="color:var(--text)">INÍCIO</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px;font-size:10px;color:var(--text-dim)">
+      <div style="display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 4px var(--green);display:inline-block"></span><b style="color:var(--green)">ONLINE</b></div>
+      <div>▣ <b style="color:var(--cyan)" id="total-arm-disp">0</b> ARM.</div>
+      <div>≡ <b style="color:var(--cyan)" id="total-gav-disp">0</b> GAV.</div>
+      <div id="esp32-indicator">◈ ESP32: <b id="esp32-status" style="color:var(--text-dim)">OFFLINE</b></div>
+      <div style="color:var(--amber);font-family:var(--mono);letter-spacing:1px"><span id="clock"></span></div>
+    </div>
   </div>
+
 </div>
 
 <!-- LAYOUT PRINCIPAL: SIDEBAR + CONTEÚDO -->
