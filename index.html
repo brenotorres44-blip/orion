@@ -180,11 +180,34 @@ window.loginGoogle = async function() {
   try {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    await signInWithPopup(auth, provider);
-    // onAuthStateChanged cuida do resto
+    const result = await signInWithPopup(auth, provider);
+    const fireUser = result.user;
+
+    // Busca ou cria perfil no Firestore diretamente
+    const perfil = await getDoc(docRef('usuarios', fireUser.uid));
+    if (perfil.exists()) {
+      usuarioAtual = { uid: fireUser.uid, email: fireUser.email, ...perfil.data() };
+      await fsSet('usuarios', fireUser.uid, { ultimoAcesso: ts() });
+    } else {
+      usuarioAtual = {
+        uid: fireUser.uid,
+        email: fireUser.email,
+        nome: fireUser.displayName || fireUser.email.split('@')[0],
+        nivel: 'admin'
+      };
+      await fsSet('usuarios', fireUser.uid, {
+        nome: usuarioAtual.nome,
+        email: fireUser.email,
+        nivel: 'admin',
+        ativo: true,
+        criado: ts(),
+        ultimoAcesso: ts()
+      });
+    }
+    mostrarApp();
   } catch(e) {
     if(e.code !== 'auth/popup-closed-by-user') {
-      mostrarErroLogin('Erro ao entrar com Google: ' + e.message);
+      mostrarErroLogin('Erro: ' + (e.message || e.code));
     }
   }
 }
