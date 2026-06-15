@@ -1283,15 +1283,15 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
 <div class="hud-corner bl"></div><div class="hud-corner br"></div>
 
 <!-- LOGIN -->
-<div id="login-overlay" style="position:fixed;inset:0;background:var(--bg);z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center">
-  <div style="position:absolute;inset:0;background-image:linear-gradient(rgba(0,212,255,0.04) 1px,transparent 1px),linear-gradient(90deg,rgba(0,212,255,0.04) 1px,transparent 1px);background-size:40px 40px;pointer-events:none"></div>
+<div id="login-overlay" style="position:fixed;inset:0;background:#020d1a;z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden">
+  <canvas id="matrix-canvas" style="position:absolute;inset:0;width:100%;height:100%;opacity:0.55"></canvas>
   <div style="position:relative;width:100%;max-width:400px;padding:0 24px">
     <div style="text-align:center;margin-bottom:36px">
       <div style="font-family:var(--sans);font-size:30px;font-weight:700;color:var(--cyan);letter-spacing:6px;text-transform:uppercase">ORI<span style="color:var(--amber)">ON</span></div>
       <div style="font-size:11px;color:var(--text-dim);letter-spacing:3px;margin-top:6px;text-transform:uppercase">Sistema de Organização Inteligente</div>
       <div style="width:60px;height:1px;background:var(--cyan);margin:14px auto 0;opacity:0.4"></div>
     </div>
-    <div style="background:var(--bg2);border:1px solid var(--border);padding:28px;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));position:relative">
+    <div style="background:rgba(9,22,40,0.92);border:1px solid var(--border);padding:28px;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));position:relative;backdrop-filter:blur(4px)">
       <div style="position:absolute;top:0;right:0;width:0;height:0;border-style:solid;border-width:0 16px 16px 0;border-color:transparent var(--cyan-dim) transparent transparent;opacity:0.5"></div>
       <div style="font-size:10px;letter-spacing:3px;color:var(--cyan);text-transform:uppercase;font-weight:700;margin-bottom:20px"><i class="ti ti-lock" style="margin-right:6px"></i>Identificação requerida</div>
       <div style="display:flex;flex-direction:column;gap:14px">
@@ -1597,5 +1597,70 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
     </div>
   </div>
 </div>
+<!-- MATRIX RAIN -->
+<script>
+(function(){
+  const canvas = document.getElementById('matrix-canvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ<>[]{}|/\\#@$%&*';
+  const FONT_SIZE = 14;
+  const CYAN  = '#00d4ff';
+  const CYAN2 = '#0088aa';
+  const WHITE = '#e0f8ff';
+
+  let cols, drops;
+
+  function resize(){
+    canvas.width  = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    cols  = Math.floor(canvas.width / FONT_SIZE);
+    drops = Array.from({length: cols}, () => Math.random() * -100);
+  }
+
+  function draw(){
+    // Fade trail
+    ctx.fillStyle = 'rgba(2, 13, 26, 0.18)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.font = FONT_SIZE + 'px Share Tech Mono, monospace';
+
+    for(let i = 0; i < drops.length; i++){
+      const char = CHARS[Math.floor(Math.random() * CHARS.length)];
+      const y = drops[i] * FONT_SIZE;
+      const x = i * FONT_SIZE;
+
+      // Head of the drop — bright white
+      if(drops[i] > 0 && Math.random() > 0.9){
+        ctx.fillStyle = WHITE;
+        ctx.shadowColor = CYAN;
+        ctx.shadowBlur  = 8;
+      } else {
+        // Trail
+        const alpha = Math.random() * 0.5 + 0.5;
+        ctx.fillStyle = drops[i] % 2 === 0 ? CYAN : CYAN2;
+        ctx.shadowColor = CYAN;
+        ctx.shadowBlur  = 4;
+        ctx.globalAlpha = alpha;
+      }
+
+      ctx.fillText(char, x, y);
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur  = 0;
+
+      // Reset drop randomly at bottom
+      if(y > canvas.height && Math.random() > 0.975){
+        drops[i] = 0;
+      }
+      drops[i] += 0.5;
+    }
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+  setInterval(draw, 40);
+})();
+</script>
 </body>
 </html>
