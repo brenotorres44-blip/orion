@@ -229,27 +229,28 @@ window.toggleSenhaLogin = function() {
 
 function mostrarApp() {
   document.getElementById('login-overlay').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
+  document.getElementById('app').style.display = 'flex';
   const bar = document.getElementById('user-info-bar');
   bar.style.display = 'flex';
   document.getElementById('user-nome-disp').textContent = usuarioAtual.nome;
   document.getElementById('user-nivel-disp').innerHTML = `<span class="nivel-badge nivel-${usuarioAtual.nivel}">${usuarioAtual.nivel}</span>`;
   aplicarPermissoesNav();
-  carregarDados();
+  carregarDados().then(() => showPanel('home'));
 }
 
 function mostrarLogin() {
   document.getElementById('login-overlay').style.display = 'flex';
   document.getElementById('app').style.display = 'none';
   document.getElementById('user-info-bar').style.display = 'none';
-  document.querySelectorAll('.nav-btn').forEach(b => b.style.display = '');
+  document.querySelectorAll('.side-btn').forEach(b => b.style.display = '');
 }
 
 function aplicarPermissoesNav() {
   if(!usuarioAtual) return;
   const permitidos = PERMISSOES[usuarioAtual.nivel] || [];
-  document.querySelectorAll('.nav-btn[data-panel]').forEach(btn => {
-    btn.style.display = permitidos.includes(btn.dataset.panel) ? '' : 'none';
+  document.querySelectorAll('.side-btn[data-panel]').forEach(btn => {
+    const p = btn.dataset.panel;
+    btn.style.display = (p === 'home' || permitidos.includes(p)) ? '' : 'none';
   });
 }
 
@@ -264,10 +265,8 @@ async function carregarDados() {
       fsGetAll('movimentos'),
       fsGetAll('usuarios')
     ]);
-    // ordena movimentos por ts desc
     movimentos.sort((a,b) => (b.ts||'').localeCompare(a.ts||''));
     updateCounters();
-    renderDashboard();
   } catch(e) {
     toast('Erro ao carregar dados: ' + e.message, 'red');
   }
@@ -277,13 +276,14 @@ async function carregarDados() {
 //  NAVEGAÇÃO
 // ══════════════════════════════════════════════
 window.showPanel = function(id) {
-  if(usuarioAtual && !podeAcessar(id)) { toast('Sem permissão','red'); return; }
+  if(usuarioAtual && !podeAcessar(id) && id !== 'home') { toast('Sem permissão','red'); return; }
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.side-btn').forEach(b => b.classList.remove('active'));
   const panel = document.getElementById('panel-'+id);
   const btn   = document.querySelector(`[data-panel="${id}"]`);
   if(panel) panel.classList.add('active');
   if(btn)   btn.classList.add('active');
+  if(id==='home')       renderHome();
   if(id==='dashboard')  renderDashboard();
   if(id==='armarios')   renderArmarios();
   if(id==='itens')      { populateArmarioSelect(); renderTabela(); }
@@ -306,6 +306,46 @@ function updateCounters() {
 // ══════════════════════════════════════════════
 //  DASHBOARD
 // ══════════════════════════════════════════════
+function renderHome() {
+  const hora = new Date().getHours();
+  const saud = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite';
+  const greet = document.getElementById('home-greeting');
+  if(greet) greet.textContent = `${saud}, ${usuarioAtual?.nome?.split(' ')[0] || 'Breno'} ✦`;
+
+  const totalItens = itens.length;
+  const totalQty   = itens.reduce((a,i)=>a+(i.qty||0),0);
+  const totalVal   = itens.reduce((a,i)=>a+(i.qty||0)*(i.preco||0),0);
+  const lowCount   = itens.filter(i=>i.min>0&&i.qty<=i.min).length;
+
+  const hs = document.getElementById('home-stats');
+  if(hs) hs.innerHTML = `
+    <div class="stat-box" style="--w:${Math.min(100,armarios.length*20)}%"><div class="stat-label">Armários</div><div class="stat-value">${armarios.length}</div><div class="stat-unit">cadastrados</div></div>
+    <div class="stat-box" style="--w:60%"><div class="stat-label">Itens</div><div class="stat-value">${totalItens}</div><div class="stat-unit">cadastrados</div></div>
+    <div class="stat-box" style="--w:55%"><div class="stat-label">Unidades</div><div class="stat-value">${totalQty}</div><div class="stat-unit">em estoque</div></div>
+    <div class="stat-box" style="--w:70%"><div class="stat-label">Valor total</div><div class="stat-value" style="font-size:20px">${fmtR(totalVal)}</div><div class="stat-unit">inventário</div></div>
+    <div class="stat-box" style="--w:${lowCount>0?100:5}%;${lowCount>0?'border-color:var(--red)':''}"><div class="stat-label">Críticos</div><div class="stat-value" style="color:${lowCount>0?'var(--red)':'var(--green)'}">${lowCount}</div><div class="stat-unit">abaixo do mínimo</div></div>`;
+
+  const MODULES = [
+    {id:'dashboard', icon:'ti-layout-dashboard', name:'Dashboard',  sub:'Visão geral', amber:true},
+    {id:'armarios',  icon:'ti-building-warehouse',name:'Armários',   sub:`${armarios.length} cadastrados`},
+    {id:'itens',     icon:'ti-package',           name:'Itens',      sub:`${totalItens} itens`, badge: lowCount>0?`${lowCount} crítico(s)`:''},
+    {id:'movimentos',icon:'ti-arrows-exchange',   name:'Movimentos', sub:'Entradas e saídas'},
+    {id:'historico', icon:'ti-report-analytics',  name:'Histórico',  sub:'Relatórios'},
+    {id:'voz',       icon:'ti-microphone',        name:'Comando de Voz', sub:'Localizar item'},
+    {id:'esp32',     icon:'ti-cpu',               name:'ESP32',      sub: espOnline ? '● Online':'○ Offline'},
+    {id:'acesso',    icon:'ti-shield-lock',        name:'Acesso',     sub:`${usuarios.length} usuários`},
+  ].filter(m => podeAcessar(m.id) || m.id==='dashboard');
+
+  const hm = document.getElementById('home-modules');
+  if(hm) hm.innerHTML = MODULES.map(m=>`
+    <div class="home-module${m.amber?' amber-mod':''}" onclick="window.showPanel('${m.id}')">
+      <i class="ti ${m.icon} home-mod-icon"></i>
+      <div class="home-mod-name">${m.name}</div>
+      <div class="home-mod-sub">${m.sub}</div>
+      ${m.badge?`<div class="home-mod-badge">${m.badge}</div>`:''}
+    </div>`).join('');
+}
+
 function renderDashboard() {
   updateCounters();
   const totalItens = itens.length;
@@ -1160,18 +1200,32 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
 .hud-corner::before,.hud-corner::after{content:'';position:absolute;background:var(--cyan);opacity:0.5}
 .hud-corner.tl{top:12px;left:12px}.hud-corner.tr{top:12px;right:12px;transform:scaleX(-1)}.hud-corner.bl{bottom:12px;left:12px;transform:scaleY(-1)}.hud-corner.br{bottom:12px;right:12px;transform:scale(-1)}
 .hud-corner::before{top:0;left:0;width:2px;height:24px}.hud-corner::after{top:0;left:0;width:24px;height:2px}
-#app{position:relative;z-index:1;max-width:1400px;margin:0 auto;padding:0 16px 60px;display:none}
-#topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 0 10px;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap}
-.logo{font-family:var(--sans);font-size:20px;font-weight:700;color:var(--cyan);letter-spacing:4px;text-transform:uppercase}
-.logo span{color:var(--amber)}
-.sys-info{display:flex;gap:20px;font-size:11px;color:var(--text-dim);align-items:center;flex-wrap:wrap}
-.sys-info b{color:var(--cyan)}
-#clock{color:var(--amber);font-family:var(--mono)}
-#nav{display:flex;gap:2px;margin:16px 0 24px;border-bottom:1px solid var(--border);flex-wrap:wrap}
-.nav-btn{font-family:var(--sans);font-size:13px;font-weight:600;letter-spacing:1px;text-transform:uppercase;padding:10px 18px;background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim);cursor:pointer;transition:all 0.2s;white-space:nowrap;display:flex;align-items:center;gap:7px}
-.nav-btn:hover{color:var(--cyan);background:var(--cyan-glow)}.nav-btn.active{color:var(--cyan);border-bottom-color:var(--cyan);background:var(--cyan-glow)}.nav-btn .ti{font-size:17px}
+#app{position:relative;z-index:1;display:none;flex-direction:column;height:100vh;overflow:hidden}
+#topbar{display:flex;align-items:center;justify-content:space-between;padding:12px 20px;border-bottom:1px solid var(--border);gap:12px;flex-wrap:wrap;flex-shrink:0;background:var(--bg2)}
+#main-layout{display:flex;flex:1;overflow:hidden}
+#sidebar{width:110px;flex-shrink:0;background:#030912;border-right:1px solid var(--border);display:flex;flex-direction:column;padding:12px 0;gap:2px;overflow-y:auto}
+.side-btn{display:flex;flex-direction:column;align-items:center;gap:5px;padding:12px 6px;background:transparent;border:none;border-left:3px solid transparent;color:var(--text-dim);cursor:pointer;transition:all 0.2s;width:100%;font-family:var(--sans)}
+.side-btn:hover{color:var(--cyan);background:var(--cyan-glow);border-left-color:var(--cyan)}
+.side-btn.active{color:var(--amber);background:rgba(255,170,0,0.08);border-left-color:var(--amber)}
+.side-btn .ti{font-size:22px}
+.side-btn span{font-size:9px;letter-spacing:1px;text-transform:uppercase;font-weight:600;line-height:1;text-align:center}
+.side-divider{height:1px;background:var(--border);margin:8px 12px}
+#content-area{flex:1;overflow-y:auto;padding:24px 28px}
 .panel{display:none;animation:fadein 0.3s ease}.panel.active{display:block}
 @keyframes fadein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* HOME MODULES */
+.home-module{background:var(--bg2);border:1px solid var(--border);padding:24px 16px;display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;transition:all 0.25s;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,0 100%);position:relative}
+.home-module::before{content:'';position:absolute;top:0;right:0;width:0;height:0;border-style:solid;border-width:0 12px 12px 0;border-color:transparent var(--cyan-dim) transparent transparent;opacity:0.4}
+.home-module:hover{border-color:var(--cyan);box-shadow:0 0 20px var(--cyan-glow);transform:translateY(-2px)}
+.home-module.amber-mod{border-color:rgba(255,170,0,0.3)}.home-module.amber-mod::before{border-color:transparent var(--amber-dim) transparent transparent}
+.home-module:hover.amber-mod{border-color:var(--amber);box-shadow:0 0 20px rgba(255,170,0,0.15)}
+.home-mod-icon{font-size:36px;color:var(--cyan)}.home-module.amber-mod .home-mod-icon{color:var(--amber)}
+.home-mod-name{font-size:11px;letter-spacing:2px;color:var(--text);text-transform:uppercase;font-weight:700;text-align:center}
+.home-mod-sub{font-size:10px;color:var(--text-dim);text-align:center}
+.home-mod-badge{font-size:10px;background:rgba(255,59,92,0.2);color:var(--red);padding:2px 8px;border-radius:2px;font-weight:600}
+
+@media(max-width:700px){#sidebar{width:60px}.side-btn span{display:none}.side-btn .ti{font-size:20px}#content-area{padding:16px}}
 .hud-card{background:var(--bg2);border:1px solid var(--border);border-radius:2px;padding:20px 24px;position:relative;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));margin-bottom:16px}
 .hud-card::before{content:'';position:absolute;top:0;right:0;width:0;height:0;border-style:solid;border-width:0 16px 16px 0;border-color:transparent var(--cyan-dim) transparent transparent;opacity:0.5}
 .hud-card-title{font-size:11px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase;margin-bottom:16px;display:flex;align-items:center;gap:8px;font-family:var(--sans);font-weight:700}
@@ -1335,8 +1389,10 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
 
 <!-- APP -->
 <div id="app">
+
+<!-- TOPBAR -->
 <div id="topbar">
-  <div class="logo">ORI<span>ON</span> <span style="font-size:11px;opacity:0.4;letter-spacing:2px;color:var(--text-dim)">v1.0</span></div>
+  <div class="logo" onclick="window.showPanel('home')" style="cursor:pointer" title="Ir para início">ORI<span>ON</span> <span style="font-size:11px;opacity:0.4;letter-spacing:2px;color:var(--text-dim)">v1.0</span></div>
   <div class="sys-info">
     <div><span class="led"></span> ONLINE</div>
     <div>▣ ARMÁRIOS: <b id="total-arm-disp">0</b></div>
@@ -1351,19 +1407,59 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
     <button class="hud-btn danger" style="padding:4px 10px;font-size:10px;margin-left:4px" onclick="window.fazerLogout()"><i class="ti ti-logout"></i>Sair</button>
   </div>
 </div>
-<nav id="nav">
-  <button class="nav-btn active" onclick="window.showPanel('dashboard')" data-panel="dashboard"><i class="ti ti-layout-dashboard"></i>Dashboard</button>
-  <button class="nav-btn" onclick="window.showPanel('armarios')" data-panel="armarios"><i class="ti ti-building-warehouse"></i>Armários</button>
-  <button class="nav-btn" onclick="window.showPanel('itens')" data-panel="itens"><i class="ti ti-package"></i>Itens</button>
-  <button class="nav-btn" onclick="window.showPanel('movimentos')" data-panel="movimentos"><i class="ti ti-arrows-exchange"></i>Movimentos</button>
-  <button class="nav-btn" onclick="window.showPanel('historico')" data-panel="historico"><i class="ti ti-report-analytics"></i>Histórico</button>
-  <button class="nav-btn" onclick="window.showPanel('voz')" data-panel="voz"><i class="ti ti-microphone"></i>Comando de Voz</button>
-  <button class="nav-btn" onclick="window.showPanel('esp32')" data-panel="esp32"><i class="ti ti-cpu"></i>ESP32</button>
-  <button class="nav-btn" onclick="window.showPanel('acesso')" data-panel="acesso"><i class="ti ti-shield-lock"></i>Acesso</button>
-</nav>
+
+<!-- LAYOUT PRINCIPAL: SIDEBAR + CONTEÚDO -->
+<div id="main-layout">
+
+  <!-- SIDEBAR -->
+  <nav id="sidebar">
+    <button class="side-btn" onclick="window.showPanel('home')" data-panel="home">
+      <i class="ti ti-home"></i><span>Início</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('dashboard')" data-panel="dashboard">
+      <i class="ti ti-layout-dashboard"></i><span>Dashboard</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('armarios')" data-panel="armarios">
+      <i class="ti ti-building-warehouse"></i><span>Armários</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('itens')" data-panel="itens">
+      <i class="ti ti-package"></i><span>Itens</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('movimentos')" data-panel="movimentos">
+      <i class="ti ti-arrows-exchange"></i><span>Movimentos</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('historico')" data-panel="historico">
+      <i class="ti ti-report-analytics"></i><span>Histórico</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('voz')" data-panel="voz">
+      <i class="ti ti-microphone"></i><span>Voz</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('esp32')" data-panel="esp32">
+      <i class="ti ti-cpu"></i><span>ESP32</span>
+    </button>
+    <div class="side-divider"></div>
+    <button class="side-btn" onclick="window.showPanel('acesso')" data-panel="acesso">
+      <i class="ti ti-shield-lock"></i><span>Acesso</span>
+    </button>
+  </nav>
+
+  <!-- CONTEÚDO -->
+  <div id="content-area">
+
+<!-- HOME -->
+<div id="panel-home" class="panel active">
+  <div style="padding:8px 0 24px">
+    <div style="font-size:10px;letter-spacing:3px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px">Central de controle</div>
+    <div style="font-size:22px;font-weight:700;color:var(--cyan);letter-spacing:2px" id="home-greeting">Bem-vindo</div>
+  </div>
+  <!-- Stats rápidos -->
+  <div class="stat-row" id="home-stats"></div>
+  <!-- Quadrantes de módulos -->
+  <div id="home-modules" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-top:8px"></div>
+</div>
 
 <!-- DASHBOARD -->
-<div id="panel-dashboard" class="panel active">
+<div id="panel-dashboard" class="panel">
   <div class="stat-row" id="stats-row"></div>
   <div class="two-col">
     <div class="hud-card"><div class="hud-card-title"><i class="ti ti-building-warehouse"></i>Armários</div><div id="dash-arm-list"></div></div>
@@ -1585,6 +1681,8 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
   </div>
 </div>
 
+</div><!-- /content-area -->
+</div><!-- /main-layout -->
 </div><!-- /app -->
 <div id="toast"></div>
 <div id="modal-overlay">
