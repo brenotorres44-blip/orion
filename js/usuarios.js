@@ -160,17 +160,26 @@ window.salvarUsuario = async function(){
   const plejEmail  = planejador ? (document.getElementById('ac-plej-email')?.value.trim()||'') : '';
   const plejWpp    = planejador ? (document.getElementById('ac-plej-wpp')?.value.trim().replace(/\D/g,'')||'') : '';
   if(editandoUserId){
-    const upd={nome,nivel,ativo,status:'ativo',planejador,plejSetor,plejEmail,plejWpp};
+    const userAtual = usuarios.find(u => u.id === editandoUserId);
+    const qrData = userAtual?.qrData || `ORION_USER:${editandoUserId}:${nome}`;
+    const upd={nome,nivel,ativo,status:'ativo',planejador,plejSetor,plejEmail,plejWpp,qrData};
     await fsSet('usuarios',editandoUserId,upd);
-    const idx=usuarios.findIndex(u=>u.id===editandoUserId); if(idx>=0) usuarios[idx]={...usuarios[idx],...upd};
+    const idx=usuarios.findIndex(u=>u.id===editandoUserId);
+    if(idx>=0) usuarios[idx]={...usuarios[idx],...upd};
     toast('Usuário atualizado ✓');
   } else {
     if(!senha){toast('Informe uma senha','red');return;}
     try{
       const cred=await createUserWithEmailAndPassword(auth,email,senha);
-      await fsSet('usuarios',cred.user.uid,{nome,email,nivel,ativo:true,status:'ativo',criado:ts(),ultimoAcesso:'—',lgpdConsent:false,planejador,plejSetor,plejEmail,plejWpp});
-      usuarios.push({id:cred.user.uid,nome,email,nivel,ativo:true,status:'ativo',criado:ts(),planejador,plejSetor,plejEmail,plejWpp});
-      toast('Usuário cadastrado ✓ · E-mail: '+email);
+      const novoId = cred.user.uid;
+      const qrData = `ORION_USER:${novoId}:${nome}`;
+      await fsSet('usuarios',novoId,{
+        nome,email,nivel,ativo:true,status:'ativo',
+        criado:ts(),ultimoAcesso:'—',lgpdConsent:false,
+        planejador,plejSetor,plejEmail,plejWpp,qrData
+      });
+      usuarios.push({id:novoId,nome,email,nivel,ativo:true,status:'ativo',criado:ts(),planejador,plejSetor,plejEmail,plejWpp,qrData});
+      toast('Usuário cadastrado ✓ · QR Code gerado · E-mail: '+email);
     }catch(e){ const msgs={'auth/email-already-in-use':'E-mail já cadastrado','auth/invalid-email':'E-mail inválido','auth/weak-password':'Senha muito fraca'}; toast(msgs[e.code]||'Erro: '+e.message,'red'); return; }
   }
   window.cancelarEdicaoUsuario(); renderTabelaUsuarios();
