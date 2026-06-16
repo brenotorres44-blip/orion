@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ORION — Sistema de Organização Inteligente</title>
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Exo+2:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/@tabler/icons-webfont@latest/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/panels.css">
+</head>
+<body>
+<body>
+<div class="hud-corner tl"></div><div class="hud-corner tr"></div>
+<div class="hud-corner bl"></div><div class="hud-corner br"></div>
+
+<!-- LOGIN -->
+<div id="login-overlay" style="position:fixed;inset:0;background:#020d1a;z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden">
+  <canvas id="matrix-canvas" style="position:absolute;inset:0;width:100%;height:100%;opacity:0.55"></canvas>
+  <div style="position:relative;width:100%;max-width:400px;padding:0 24px">
+    <div style="text-align:center;margin-bottom:36px">
+      <div style="font-family:var(--sans);font-size:30px;font-weight:700;color:var(--cyan);letter-spacing:6px;text-transform:uppercase">ORI<span style="color:var(--amber)">ON</span></div>
+      <div style="font-size:11px;color:var(--text-dim);letter-spacing:3px;margin-top:6px;text-transform:uppercase">Sistema de Organização Inteligente</div>
+      <div style="width:60px;height:1px;background:var(--cyan);margin:14px auto 0;opacity:0.4"></div>
+    </div>
+    <div style="background:rgba(9,22,40,0.92);border:1px solid var(--border);padding:28px;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));position:relative;backdrop-filter:blur(4px)">
+      <div style="position:absolute;top:0;right:0;width:0;height:0;border-style:solid;border-width:0 16px 16px 0;border-color:transparent var(--cyan-dim) transparent transparent;opacity:0.5"></div>
+      <div style="font-size:10px;letter-spacing:3px;color:var(--cyan);text-transform:uppercase;font-weight:700;margin-bottom:20px"><i class="ti ti-lock" style="margin-right:6px"></i>Identificação requerida</div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="field-group"><label class="field-label">E-mail</label>
+          <input class="hud-input" id="login-user" type="email" placeholder="seu@email.com" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('login-pass').focus()">
+        </div>
+        <div class="field-group"><label class="field-label">Senha</label>
+          <div style="position:relative">
+            <input class="hud-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')window.fazerLogin()" style="padding-right:44px">
+            <button onclick="window.toggleSenhaLogin()" id="btn-toggle-pass" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px"><i class="ti ti-eye"></i></button>
+          </div>
+        </div>
+        <div id="login-erro" style="font-size:12px;color:var(--red);display:none;text-align:center;letter-spacing:1px"></div>
+        <button class="hud-btn" onclick="window.fazerLogin()" style="width:100%;justify-content:center;padding:13px"><i class="ti ti-login"></i>Entrar no sistema</button>
+        <div style="text-align:right;margin-top:-6px">
+          <button onclick="window.esqueceuSenha()" style="background:none;border:none;color:var(--text-dim);font-size:11px;cursor:pointer;font-family:var(--sans);letter-spacing:0.5px;transition:color 0.2s" onmouseover="this.style.color='var(--cyan)'" onmouseout="this.style.color='var(--text-dim)'"><i class="ti ti-key" style="margin-right:4px"></i>Esqueci minha senha</button>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin:4px 0">
+          <div style="flex:1;height:1px;background:var(--border)"></div>
+          <span style="font-size:10px;color:var(--text-dim);letter-spacing:1px">OU</span>
+          <div style="flex:1;height:1px;background:var(--border)"></div>
+        </div>
+
+        <button onclick="window.loginGoogle()" style="width:100%;padding:12px;background:white;border:none;border-radius:2px;display:flex;align-items:center;justify-content:center;gap:10px;font-family:var(--sans);font-size:13px;font-weight:600;color:#3c4043;cursor:pointer;transition:box-shadow 0.2s;letter-spacing:0.5px;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.3)'" onmouseout="this.style.boxShadow='none'">
+          <svg width="18" height="18" viewBox="0 0 48 48">
+            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+            <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+          </svg>
+          Entrar com Google
+        </button>
+
+        <div style="text-align:center;padding-top:4px;border-top:1px solid var(--border)">
+          <span style="font-size:11px;color:var(--text-dim)">Não tem conta? </span>
+          <button onclick="window.mostrarTelaRegistro()" style="background:none;border:none;color:var(--cyan);font-size:11px;cursor:pointer;font-family:var(--sans);font-weight:600;letter-spacing:0.5px;text-decoration:underline">Solicitar acesso</button>
+        </div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:16px;font-size:10px;color:var(--text-dim);letter-spacing:1px">Acesso restrito · ORION v1.0 · Firebase</div>
+  </div>
+</div>
+
+<!-- TELA DE REGISTRO -->
+<div id="registro-overlay" style="position:fixed;inset:0;background:#020d1a;z-index:9001;display:none;flex-direction:column;align-items:center;justify-content:center;overflow-y:auto;overflow-x:hidden">
+  <canvas id="matrix-canvas-reg" style="position:absolute;inset:0;width:100%;height:100%;opacity:0.35;pointer-events:none"></canvas>
+  <div style="position:relative;width:100%;max-width:460px;padding:20px 24px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="font-family:var(--sans);font-size:26px;font-weight:700;color:var(--cyan);letter-spacing:6px;text-transform:uppercase">ORI<span style="color:var(--amber)">ON</span></div>
+      <div style="font-size:10px;color:var(--text-dim);letter-spacing:2px;margin-top:4px;text-transform:uppercase">Solicitação de acesso</div>
+    </div>
+    <div style="background:rgba(9,22,40,0.93);border:1px solid var(--border);padding:24px;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));backdrop-filter:blur(4px)">
+
+      <div style="font-size:10px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase;font-weight:700;margin-bottom:18px"><i class="ti ti-user-plus" style="margin-right:6px"></i>Criar nova conta</div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="field-group"><label class="field-label">Nome completo</label>
+          <input class="hud-input" id="reg-nome" placeholder="Seu nome completo" autocomplete="name">
+        </div>
+        <div class="field-group"><label class="field-label">E-mail</label>
+          <input class="hud-input" id="reg-email" type="email" placeholder="seu@email.com" autocomplete="email">
+        </div>
+        <div class="field-group"><label class="field-label">Setor / Área</label>
+          <input class="hud-input" id="reg-setor" placeholder="ex: Manutenção, Produção...">
+        </div>
+        <div class="field-group"><label class="field-label">Senha</label>
+          <input class="hud-input" id="reg-senha" type="password" placeholder="mínimo 6 caracteres">
+        </div>
+        <div class="field-group"><label class="field-label">Confirmar senha</label>
+          <input class="hud-input" id="reg-senha2" type="password" placeholder="repita a senha">
+        </div>
+        <div class="field-group"><label class="field-label">Justificativa de acesso</label>
+          <textarea class="hud-input" id="reg-motivo" placeholder="Por que você precisa de acesso ao sistema?" style="height:70px;resize:none;font-family:var(--sans)"></textarea>
+        </div>
+
+        <!-- LGPD -->
+        <div style="background:rgba(0,212,255,0.04);border:1px solid rgba(0,212,255,0.15);padding:12px;font-size:11px;color:var(--text-dim);line-height:1.6">
+          <div style="color:var(--cyan);font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px"><i class="ti ti-shield-check" style="margin-right:4px"></i>Proteção de Dados — LGPD</div>
+          Seus dados (nome, e-mail e setor) serão coletados exclusivamente para <b style="color:var(--text)">controle de acesso</b> ao sistema ORION. Não serão compartilhados com terceiros. Você pode solicitar a exclusão a qualquer momento ao administrador.
+          <div style="margin-top:8px">Base legal: <b style="color:var(--text)">Legítimo interesse</b> (Art. 7º, IX — Lei 13.709/2018).</div>
+        </div>
+
+        <!-- Checkbox consentimento -->
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:12px;color:var(--text-dim)">
+          <input type="checkbox" id="reg-lgpd" style="margin-top:2px;accent-color:var(--cyan);width:15px;height:15px;flex-shrink:0">
+          <span>Li e concordo com o tratamento dos meus dados pessoais conforme descrito acima, nos termos da <b style="color:var(--cyan)">Lei Geral de Proteção de Dados (LGPD)</b>.</span>
+        </label>
+
+        <div id="reg-erro" style="font-size:12px;color:var(--red);display:none;text-align:center"></div>
+        <div id="reg-sucesso" style="font-size:12px;color:var(--green);display:none;text-align:center;line-height:1.6"></div>
+
+        <button class="hud-btn green-btn" onclick="window.registrarUsuario()" style="width:100%;justify-content:center;padding:12px"><i class="ti ti-user-check"></i>Solicitar acesso</button>
+        <button onclick="window.voltarLogin()" style="background:none;border:none;color:var(--text-dim);font-size:11px;cursor:pointer;font-family:var(--sans);text-align:center;width:100%;padding:4px"><i class="ti ti-arrow-left" style="margin-right:4px"></i>Voltar ao login</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+
+<!-- TOPBAR CONCEITO 3 — Duplo nível -->
+<div id="topbar" style="padding:0;flex-direction:column">
+
+  <!-- Linha 1: Logo + usuário -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 20px;border-bottom:1px solid rgba(0,212,255,0.1)">
+    <div style="display:flex;align-items:center;gap:0">
+      <div class="logo" onclick="window.showPanel('home')" style="cursor:pointer;font-size:18px;letter-spacing:5px" title="Ir para início">ORI<span>ON</span></div>
+      <div style="font-size:9px;color:var(--text-dim);letter-spacing:2px;text-transform:uppercase;margin-left:12px;padding-left:12px;border-left:1px solid rgba(0,212,255,0.2)">Sistema de Organização Inteligente</div>
+    </div>
+    <div id="user-info-bar" style="display:none;align-items:center;gap:14px">
+      <!-- Alternador de modo (só para admin) -->
+      <div id="modo-toggle" style="display:none;align-items:center;gap:8px;background:rgba(0,212,255,0.05);border:1px solid rgba(0,212,255,0.2);padding:4px 10px">
+        <span style="font-size:9px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Modo:</span>
+        <button id="btn-modo-admin" onclick="window.alternarModo('admin')" style="font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:3px 10px;border:1px solid rgba(255,59,92,0.5);background:rgba(255,59,92,0.15);color:var(--red);cursor:pointer;font-family:var(--sans);font-weight:700;transition:all 0.2s">ADMIN</button>
+        <button id="btn-modo-op" onclick="window.alternarModo('operador')" style="font-size:9px;letter-spacing:1px;text-transform:uppercase;padding:3px 10px;border:1px solid rgba(0,212,255,0.2);background:transparent;color:var(--text-dim);cursor:pointer;font-family:var(--sans);font-weight:700;transition:all 0.2s">OPERADOR</button>
+      </div>
+      <!-- Avatar + nome -->
+      <div style="display:flex;align-items:center;gap:8px">
+        <div id="user-avatar" style="width:30px;height:30px;border-radius:50%;background:rgba(255,170,0,0.15);border:1px solid rgba(255,170,0,0.4);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--amber)">BT</div>
+        <div style="line-height:1.3">
+          <div id="user-nome-disp" style="font-size:11px;color:var(--text);font-weight:600"></div>
+          <div id="user-nivel-disp" style="font-size:9px;color:var(--amber);letter-spacing:1px;text-transform:uppercase"></div>
+        </div>
+      </div>
+      <button class="hud-btn danger" style="padding:4px 12px;font-size:10px" onclick="window.fazerLogout()"><i class="ti ti-logout"></i>Sair</button>
+    </div>
+  </div>
+
+  <!-- Linha 2: Breadcrumb + indicadores -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 20px;background:rgba(0,0,0,0.25)">
+    <div style="display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text-dim);letter-spacing:1px">
+      <span style="cursor:pointer;color:var(--cyan)" onclick="window.showPanel('home')">ORION</span>
+      <span style="color:rgba(0,212,255,0.3)">›</span>
+      <span id="breadcrumb-atual" style="color:var(--text)">INÍCIO</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:16px;font-size:10px;color:var(--text-dim)">
+      <div style="display:flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 4px var(--green);display:inline-block"></span><b style="color:var(--green)">ONLINE</b></div>
+      <div>▣ <b style="color:var(--cyan)" id="total-arm-disp">0</b> ARM.</div>
+      <div>≡ <b style="color:var(--cyan)" id="total-gav-disp">0</b> GAV.</div>
+      <div id="esp32-indicator">◈ ESP32: <b id="esp32-status" style="color:var(--text-dim)">OFFLINE</b></div>
+      <div style="color:var(--amber);font-family:var(--mono);letter-spacing:1px"><span id="clock"></span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- LAYOUT PRINCIPAL: SIDEBAR + CONTEÚDO -->
+<div id="main-layout">
+
+  <!-- SIDEBAR -->
+  <nav id="sidebar">
+    <button class="side-btn" onclick="window.showPanel('home')" data-panel="home">
+      <i class="ti ti-home"></i><span>Início</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('dashboard')" data-panel="dashboard">
+      <i class="ti ti-layout-dashboard"></i><span>Dashboard</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('armarios')" data-panel="armarios">
+      <i class="ti ti-building-warehouse"></i><span>Armários</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('itens')" data-panel="itens">
+      <i class="ti ti-package"></i><span>Itens</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('movimentos')" data-panel="movimentos">
+      <i class="ti ti-arrows-exchange"></i><span>Movimentos</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('historico')" data-panel="historico">
+      <i class="ti ti-report-analytics"></i><span>Histórico</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('voz')" data-panel="voz">
+      <i class="ti ti-microphone"></i><span>Voz</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('esp32')" data-panel="esp32">
+      <i class="ti ti-cpu"></i><span>ESP32</span>
+    </button>
+    <div class="side-divider"></div>
+    <button class="side-btn" onclick="window.showPanel('acesso')" data-panel="acesso">
+      <i class="ti ti-shield-lock"></i><span>Acesso</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('solicitacoes')" data-panel="solicitacoes">
+      <i class="ti ti-user-check"></i><span>Solicitações</span>
+      <span id="badge-sol" style="display:none;background:var(--red);color:white;font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;position:absolute;top:8px;right:8px"></span>
+    </button>
+  </nav>
+
+  <!-- CONTEÚDO -->
+  <div id="content-area">
+
+<!-- HOME -->
+<div id="panel-home" class="panel active">
+  <div style="padding:8px 0 24px">
+    <div style="font-size:10px;letter-spacing:3px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px">Central de controle</div>
+    <div style="font-size:22px;font-weight:700;color:var(--cyan);letter-spacing:2px" id="home-greeting">Bem-vindo</div>
+  </div>
+  <!-- Stats rápidos -->
+  <div class="stat-row" id="home-stats"></div>
+  <!-- Quadrantes de módulos -->
+  <div id="home-modules" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-top:8px"></div>
+</div>
+
+<!-- DASHBOARD -->
+<div id="panel-dashboard" class="panel">
+  <div class="stat-row" id="stats-row"></div>
+  <div class="two-col">
+    <div class="hud-card"><div class="hud-card-title"><i class="ti ti-building-warehouse"></i>Armários</div><div id="dash-arm-list"></div></div>
+    <div class="hud-card"><div class="hud-card-title"><i class="ti ti-history"></i>Últimas movimentações</div><div class="log-list" id="dash-log" style="max-height:260px"></div></div>
+  </div>
+  <div class="hud-card"><div class="hud-card-title" style="justify-content:space-between">
+    <span style="display:flex;align-items:center;gap:8px"><i class="ti ti-alert-triangle"></i>Estoque crítico</span>
+    <button class="hud-btn amber" style="padding:5px 14px;font-size:11px" onclick="window.abrirEnvioLista()"><i class="ti ti-send"></i>Enviar lista ao planejador</button>
+  </div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Item</th><th>Armário</th><th>Gaveta</th><th>Qtd</th><th>Mín</th><th>Faltam</th><th>Ação</th></tr></thead><tbody id="low-stock-body"></tbody></table></div>
+  </div>
+</div>
+
+<!-- ARMÁRIOS -->
+<div id="panel-armarios" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title" id="arm-form-title">+ Adicionar armário</div>
+    <div class="hud-form">
+      <div class="field-group"><label class="field-label">Nome do armário</label><input class="hud-input" id="arm-nome" placeholder="ex: Oficina Principal"></div>
+      <div class="field-group"><label class="field-label">Localização</label><input class="hud-input" id="arm-local" placeholder="ex: Garagem"></div>
+      <div class="field-group"><label class="field-label">Número de gavetas</label><input class="hud-input" id="arm-ngav" type="number" min="1" max="30" value="5"></div>
+      <div class="field-group"><label class="field-label">Cor</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="hud-input" id="arm-cor" type="color" value="#00d4ff" style="width:56px;padding:4px;cursor:pointer;height:42px">
+          <span id="arm-cor-preview" style="font-size:12px;color:var(--text-dim)">Ciano padrão</span>
+        </div>
+      </div>
+    </div>
+    <div id="gav-names-wrap" style="margin-top:16px;display:none">
+      <div style="font-size:11px;color:var(--cyan);letter-spacing:1px;text-transform:uppercase;font-weight:600;margin-bottom:10px">Nomes das gavetas (opcional)</div>
+      <div id="gav-names-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px"></div>
+    </div>
+    <div class="form-actions">
+      <button class="hud-btn" onclick="window.salvarArmario()"><i class="ti ti-device-floppy"></i>Salvar armário</button>
+      <button class="hud-btn amber" id="btn-cancel-arm" onclick="window.cancelarArmario()" style="display:none"><i class="ti ti-x"></i>Cancelar</button>
+    </div>
+  </div>
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title"><i class="ti ti-building-warehouse"></i>Seus armários</div>
+    <div class="armario-grid" id="armario-grid"></div>
+    <div id="arm-empty" style="display:none;padding:24px;text-align:center;color:var(--text-dim)">Nenhum armário cadastrado.</div>
+  </div>
+  <div id="gaveta-detail">
+    <div class="detail-header">
+      <div><div class="detail-title" id="detail-title"></div><div class="detail-sub" id="detail-sub"></div></div>
+      <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap">
+        <button class="hud-btn" onclick="window.abrirFormItem(null,currentArmId,currentGavId)"><i class="ti ti-plus"></i>Novo item aqui</button>
+        <button class="hud-btn amber" onclick="window.fecharDetalhe()"><i class="ti ti-x"></i>Fechar</button>
+      </div>
+    </div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Item</th><th>Qtd</th><th>Mín</th><th>Preço</th><th>Categoria</th><th>Ações</th></tr></thead><tbody id="detail-tbody"></tbody></table></div>
+  </div>
+</div>
+
+<!-- ITENS -->
+<div id="panel-itens" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title" id="form-title-itens">+ Cadastrar item</div>
+    <div class="hud-form">
+      <div class="field-group"><label class="field-label">Nome do item</label><input class="hud-input" id="f-nome" placeholder="ex: chave de fenda" autocomplete="off"></div>
+      <div class="field-group"><label class="field-label">Armário</label><select class="hud-select" id="f-armario" onchange="populateGavetasSelect(this.value,'f-gaveta','')"></select></div>
+      <div class="field-group"><label class="field-label">Gaveta</label><select class="hud-select" id="f-gaveta"></select></div>
+      <div class="field-group"><label class="field-label">Quantidade inicial</label><input class="hud-input" id="f-qty" type="number" min="0" placeholder="0"></div>
+      <div class="field-group"><label class="field-label">Qtd mínima (alerta)</label><input class="hud-input" id="f-min" type="number" min="0" placeholder="1"></div>
+      <div class="field-group"><label class="field-label">Preço unitário (R$)</label><input class="hud-input" id="f-preco" type="number" step="0.01" min="0" placeholder="0.00"></div>
+      <div class="field-group"><label class="field-label">Categoria</label><input class="hud-input" id="f-cat" placeholder="ex: ferramentas" autocomplete="off"></div>
+    </div>
+    <div class="form-actions">
+      <button class="hud-btn" onclick="window.salvarItem()"><i class="ti ti-device-floppy"></i>Salvar item</button>
+      <button class="hud-btn amber" onclick="window.cancelarEdicaoItem()" id="btn-cancelar-edit" style="display:none"><i class="ti ti-x"></i>Cancelar</button>
+    </div>
+  </div>
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title"><i class="ti ti-list"></i>Itens cadastrados</div>
+    <div class="search-wrap">
+      <input class="hud-input" id="search-itens" placeholder="Buscar..." oninput="renderTabela()">
+      <select class="hud-select" id="filter-arm" style="width:180px"><option value="">Todos os armários</option></select>
+      <select class="hud-select" id="filter-gav" style="width:130px"><option value="">Todas as gavetas</option></select>
+    </div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Nome</th><th>Armário</th><th>Gaveta</th><th>Qtd</th><th>Mín</th><th>Preço</th><th>Categoria</th><th>Ações</th></tr></thead><tbody id="tabela-itens"></tbody></table></div>
+  </div>
+</div>
+
+<!-- MOVIMENTOS -->
+<div id="panel-movimentos" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-transfer-in"></i>Registrar movimentação</div>
+    <div class="hud-form">
+      <div class="field-group" style="grid-column:span 2"><label class="field-label">Item</label><select class="hud-select" id="mov-item"></select></div>
+      <div class="field-group"><label class="field-label">Tipo</label><select class="hud-select" id="mov-tipo"><option value="entrada">Entrada</option><option value="saida">Saída</option></select></div>
+      <div class="field-group"><label class="field-label">Quantidade</label><input class="hud-input" id="mov-qty" type="number" min="1" placeholder="1"></div>
+      <div class="field-group" style="grid-column:span 2"><label class="field-label">Observação</label><input class="hud-input" id="mov-obs" placeholder="opcional..."></div>
+    </div>
+    <div class="form-actions"><button class="hud-btn green-btn" onclick="window.registrarMovimento()"><i class="ti ti-check"></i>Registrar</button></div>
+  </div>
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title" style="justify-content:space-between">
+      <span style="display:flex;align-items:center;gap:8px"><i class="ti ti-clock"></i>Histórico</span>
+      <button class="hud-btn danger" style="padding:5px 14px;font-size:11px" onclick="window.limparHistorico()"><i class="ti ti-trash"></i>Limpar</button>
+    </div>
+    <div class="log-list" id="mov-log"></div>
+  </div>
+</div>
+
+<!-- HISTÓRICO -->
+<div id="panel-historico" class="panel">
+  <div class="hud-card" style="margin-bottom:0">
+    <div class="hud-card-title"><i class="ti ti-table"></i>Relatório de estoque</div>
+    <div class="search-wrap">
+      <input class="hud-input" id="hist-search" placeholder="Filtrar..." oninput="renderHistorico()">
+      <select class="hud-select" id="hist-arm" onchange="renderHistorico()" style="width:180px"><option value="">Todos os armários</option></select>
+    </div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Item</th><th>Armário</th><th>Gaveta</th><th>Categoria</th><th>Qtd</th><th>Mín</th><th>Preço</th><th>Valor total</th><th>Status</th></tr></thead><tbody id="hist-body"></tbody></table></div>
+    <div style="margin-top:16px;display:flex;gap:24px;font-size:12px;color:var(--text-dim);flex-wrap:wrap" id="hist-totais"></div>
+  </div>
+</div>
+
+<!-- VOZ -->
+<div id="panel-voz" class="panel">
+  <div id="voice-panel-wrap">
+    <div style="text-align:center">
+      <div style="font-size:10px;letter-spacing:3px;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px">Sistema de localização por voz</div>
+      <div style="font-size:13px;color:var(--text);max-width:440px;line-height:1.6">Fale o nome do item. O sistema localiza em qual armário e gaveta ele está.</div>
+    </div>
+    <div id="radar-wrap">
+      <svg id="radar-svg" viewBox="0 0 240 240">
+        <circle cx="120" cy="120" r="100" class="radar-ring"/><circle cx="120" cy="120" r="75" class="radar-ring"/><circle cx="120" cy="120" r="50" class="radar-ring"/><circle cx="120" cy="120" r="25" class="radar-ring"/>
+        <line x1="120" y1="20" x2="120" y2="220" class="radar-spoke"/><line x1="20" y1="120" x2="220" y2="120" class="radar-spoke"/><line x1="50" y1="50" x2="190" y2="190" class="radar-spoke"/><line x1="190" y1="50" x2="50" y2="190" class="radar-spoke"/>
+        <g id="radar-sweep">
+          <defs><radialGradient id="sweepGrad" cx="0%" cy="50%" r="100%"><stop offset="0%" stop-color="var(--cyan)" stop-opacity="0"/><stop offset="100%" stop-color="var(--cyan)" stop-opacity="0.35"/></radialGradient></defs>
+          <path d="M120 120 L220 120 A100 100 0 0 0 120 20 Z" fill="url(#sweepGrad)"/>
+          <line x1="120" y1="120" x2="220" y2="120" stroke="var(--cyan)" stroke-width="1" opacity="0.7"/>
+        </g>
+      </svg>
+      <div id="voice-ring-outer"></div><div id="voice-ring-inner"></div>
+      <button id="mic-btn" onclick="window.toggleVoz()">🎤</button>
+    </div>
+    <div id="voice-status">Clique no microfone para iniciar</div>
+    <div id="voice-transcript">—</div>
+    <div id="voice-result" style="width:100%;max-width:640px;display:none">
+      <div class="hud-card">
+        <div class="hud-card-title" id="vr-title">◉ Aguardando</div>
+        <div id="vr-content"></div>
+        <div class="gaveta-display" id="gaveta-display" style="margin-top:16px"></div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:var(--text-dim);text-align:center;letter-spacing:1px">⚠ Requer HTTPS · Chrome · Microfone habilitado</div>
+  </div>
+</div>
+
+<!-- ESP32 -->
+<div id="panel-esp32" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-wifi"></i>Conexão com o ESP32</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      <div class="field-group"><label class="field-label">IP do ESP32</label><input class="hud-input" id="esp-ip" placeholder="192.168.1.50" value="192.168.1.50" style="width:180px"></div>
+      <div class="field-group"><label class="field-label">Porta</label><input class="hud-input" id="esp-porta" placeholder="80" value="80" style="width:80px"></div>
+      <div class="form-actions" style="margin-top:0">
+        <button class="hud-btn" onclick="window.testarConexao()"><i class="ti ti-wifi"></i>Testar</button>
+        <button class="hud-btn amber" onclick="window.testarLeds()"><i class="ti ti-bulb"></i>Testar LEDs</button>
+        <button class="hud-btn danger" onclick="window.fecharTodasTravas()"><i class="ti ti-lock"></i>Fechar travas</button>
+      </div>
+    </div>
+    <div id="esp-conn-status" style="margin-top:12px;font-size:13px;color:var(--text-dim)"><span class="led off"></span> Não testado</div>
+  </div>
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-settings"></i>Mapeamento de pinos GPIO</div>
+    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center">
+      <label class="field-label" style="margin:0;white-space:nowrap">Armário:</label>
+      <select class="hud-select" id="esp-arm-sel" onchange="renderPinosForm()" style="max-width:220px"></select>
+    </div>
+    <div id="pinos-form"></div>
+    <div class="form-actions" style="margin-top:20px">
+      <button class="hud-btn" onclick="enviarConfigESP32()"><i class="ti ti-upload"></i>Enviar ao ESP32</button>
+      <button class="hud-btn amber" onclick="window.salvarPinosLocal()"><i class="ti ti-device-floppy"></i>Salvar local</button>
+    </div>
+  </div>
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-hand-click"></i>Controle manual</div>
+    <div id="manual-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px"></div>
+  </div>
+</div>
+
+<!-- ACESSO -->
+<div id="panel-acesso" class="panel">
+
+  <!-- Abas -->
+  <div style="display:flex;gap:2px;margin-bottom:20px;border-bottom:1px solid var(--border)">
+    <button class="nav-btn active" id="tab-usuarios" onclick="window.trocarTabAcesso('usuarios')" style="padding:8px 18px;font-size:12px"><i class="ti ti-users"></i>Usuários</button>
+    <button class="nav-btn" id="tab-solicitacoes" onclick="window.trocarTabAcesso('solicitacoes')" style="padding:8px 18px;font-size:12px"><i class="ti ti-user-check"></i>Solicitações <span id="badge-sol" style="display:none;background:var(--red);color:white;border-radius:99px;padding:1px 6px;font-size:10px;margin-left:4px">0</span></button>
+  </div>
+
+  <!-- Painel usuários -->
+  <div id="sub-usuarios">
+    <div class="hud-card" style="margin-bottom:0">
+      <div class="hud-card-title" style="justify-content:space-between">
+        <span style="display:flex;align-items:center;gap:8px"><i class="ti ti-users"></i>Usuários cadastrados</span>
+        <button class="hud-btn green-btn" onclick="window.abrirFormUsuario()" style="padding:6px 14px;font-size:11px"><i class="ti ti-user-plus"></i>Novo usuário</button>
+      </div>
+      <div class="hud-table-wrap">
+        <table class="hud-table"><thead><tr><th>Nome</th><th>E-mail</th><th>Setor</th><th>Nível</th><th>Planejador</th><th>Status</th><th>Último acesso</th><th>Ações</th></tr></thead><tbody id="tabela-usuarios"></tbody></table>
+      </div>
+    </div>
+    <div id="form-usuario-wrap" style="display:none;animation:fadein 0.25s ease;margin-top:16px">
+      <div class="hud-card" style="border-color:var(--border-hi);margin-bottom:0">
+        <div class="hud-card-title" style="justify-content:space-between">
+          <span id="form-usuario-title" style="display:flex;align-items:center;gap:8px"><i class="ti ti-user-plus"></i>Novo usuário</span>
+          <button class="icon-btn danger" onclick="window.cancelarEdicaoUsuario()" style="font-size:16px">✕</button>
+        </div>
+        <div class="hud-form">
+          <div class="field-group"><label class="field-label">Nome completo</label><input class="hud-input" id="ac-nome" placeholder="ex: João Silva" autocomplete="off"></div>
+          <div class="field-group"><label class="field-label">E-mail (login)</label><input class="hud-input" id="ac-login" type="email" placeholder="joao@email.com" autocomplete="off"></div>
+          <div class="field-group"><label class="field-label">Senha <span id="ac-senha-hint" style="color:var(--text-dim);font-size:10px;font-weight:400"></span></label><input class="hud-input" id="ac-senha" type="password" placeholder="mínimo 6 caracteres"></div>
+          <div class="field-group"><label class="field-label">Confirmar senha</label><input class="hud-input" id="ac-senha2" type="password" placeholder="repita a senha"></div>
+          <div class="field-group"><label class="field-label">Setor</label><input class="hud-input" id="ac-setor" placeholder="ex: Manutenção"></div>
+          <div class="field-group"><label class="field-label">Nível de acesso</label>
+            <select class="hud-select" id="ac-nivel">
+              <option value="admin">Admin — acesso total</option>
+              <option value="operador" selected>Operador — ver + movimentos</option>
+              <option value="consulta">Consulta — somente leitura</option>
+            </select>
+          </div>
+          <div class="field-group"><label class="field-label">Status</label>
+            <select class="hud-select" id="ac-status"><option value="ativo">Ativo</option><option value="inativo">Inativo</option></select>
+          </div>
+          <!-- SEPARADOR PLANEJADOR -->
+          <div style="grid-column:span 2;border-top:1px solid var(--border);padding-top:14px;margin-top:4px">
+            <div style="font-size:10px;letter-spacing:2px;color:var(--amber);text-transform:uppercase;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:6px">
+              <i class="ti ti-send"></i>Dados de planejador da área <span style="font-size:9px;color:var(--text-dim);font-weight:400;letter-spacing:0;text-transform:none">(opcional — para receber lista de reposição)</span>
+            </div>
+          </div>
+          <div class="field-group"><label class="field-label">É planejador da área?</label>
+            <select class="hud-select" id="ac-planejador" onchange="window.togglePlanejadorFields()">
+              <option value="0">Não</option>
+              <option value="1">Sim</option>
+            </select>
+          </div>
+          <div class="field-group" id="ac-plej-setor-wrap" style="display:none"><label class="field-label">Área / Setor que planeja</label><input class="hud-input" id="ac-plej-setor" placeholder="ex: Manutenção, Produção"></div>
+          <div class="field-group" id="ac-plej-email-wrap" style="display:none"><label class="field-label">E-mail para lista de reposição</label><input class="hud-input" id="ac-plej-email" type="email" placeholder="planejador@empresa.com"></div>
+          <div class="field-group" id="ac-plej-wpp-wrap" style="display:none"><label class="field-label">WhatsApp (55 + DDD + número)</label><input class="hud-input" id="ac-plej-wpp" type="tel" placeholder="ex: 5581999990000"></div>
+        </div>
+        <div class="form-actions" style="margin-top:16px">
+          <button class="hud-btn" onclick="window.salvarUsuario()"><i class="ti ti-device-floppy"></i>Salvar usuário</button>
+          <button class="hud-btn amber" id="btn-reset-senha" style="display:none" onclick="window.resetSenhaUsuario()"><i class="ti ti-key"></i>Enviar redefinição de senha</button>
+          <button class="hud-btn amber" onclick="window.cancelarEdicaoUsuario()"><i class="ti ti-x"></i>Cancelar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Painel solicitações -->
+  <div id="sub-solicitacoes" style="display:none">
+    <div class="hud-card" style="margin-bottom:0">
+      <div class="hud-card-title"><i class="ti ti-user-check"></i>Solicitações de acesso pendentes</div>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:14px">Usuários que solicitaram acesso ao sistema. Aprove ou rejeite cada solicitação.</div>
+      <div class="hud-table-wrap">
+        <table class="hud-table"><thead><tr><th>Nome</th><th>E-mail</th><th>Setor</th><th>Justificativa</th><th>Data</th><th>Status</th><th>Ações</th></tr></thead><tbody id="tabela-solicitacoes"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</div><!-- /content-area -->
+</div><!-- /main-layout -->
+</div><!-- /app -->
+<div id="toast"></div>
+<div id="modal-overlay">
+  <div id="modal-box">
+    <div class="modal-title"><i class="ti ti-alert-triangle"></i><span id="modal-title-txt">Confirmar</span></div>
+    <div id="modal-msg" style="font-size:14px;color:var(--text);line-height:1.7"></div>
+    <div class="modal-actions">
+      <button class="hud-btn" onclick="window.closeModal()"><i class="ti ti-x"></i>Cancelar</button>
+      <button class="hud-btn danger" id="modal-confirm-btn">Confirmar</button>
+    </div>
+  </div>
+</div>
+<!-- MODAL ENVIO LISTA PLANEJADOR -->
+<div id="modal-lista" style="position:fixed;inset:0;background:rgba(5,13,26,0.92);z-index:6000;display:none;align-items:center;justify-content:center">
+  <div style="background:var(--bg2);border:1px solid var(--border-hi);padding:28px 32px;max-width:680px;width:95%;clip-path:polygon(0 0,calc(100% - 20px) 0,100% 20px,100% 100%,20px 100%,0 calc(100% - 20px));max-height:90vh;overflow-y:auto">
+    <div style="font-size:11px;letter-spacing:2px;color:var(--amber);text-transform:uppercase;margin-bottom:16px;font-weight:700;display:flex;align-items:center;gap:8px">
+      <i class="ti ti-send"></i>Enviar lista de reposição ao planejador
+    </div>
+
+    <!-- Seletor de planejador -->
+    <div style="margin-bottom:16px">
+      <label class="field-label" style="display:block;margin-bottom:6px">Planejador destinatário</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select class="hud-select" id="lista-planejador-sel" onchange="window.selecionarPlanejador()" style="flex:1">
+          <option value="">— Selecionar planejador cadastrado —</option>
+        </select>
+        <span style="font-size:11px;color:var(--text-dim)">ou preencha manualmente ↓</span>
+      </div>
+    </div>
+
+    <!-- Destinatário e assunto -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+      <div class="field-group">
+        <label class="field-label">E-mail do planejador</label>
+        <input class="hud-input" id="lista-email" type="email" placeholder="planejador@empresa.com">
+      </div>
+      <div class="field-group">
+        <label class="field-label">WhatsApp (55 + DDD + número)</label>
+        <input class="hud-input" id="lista-wpp" type="tel" placeholder="ex: 5581999990000">
+      </div>
+      <div class="field-group">
+        <label class="field-label">Assunto</label>
+        <input class="hud-input" id="lista-assunto" value="Solicitação de reposição de ferramentas — ORION">
+      </div>
+      <div class="field-group">
+        <label class="field-label">Observação (opcional)</label>
+        <input class="hud-input" id="lista-obs" placeholder="ex: Material urgente para linha de produção">
+      </div>
+    </div>
+
+    <!-- Preview da lista -->
+    <div style="font-size:10px;color:var(--cyan);letter-spacing:2px;text-transform:uppercase;font-weight:700;margin-bottom:8px">Itens críticos detectados</div>
+    <div id="lista-preview" style="background:var(--bg3);border:1px solid var(--border);padding:16px;font-family:var(--mono);font-size:12px;line-height:1.8;color:var(--text);max-height:280px;overflow-y:auto;white-space:pre-wrap"></div>
+
+    <!-- Métodos de envio -->
+    <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="hud-btn green-btn" onclick="window.enviarWhatsApp()"><i class="ti ti-brand-whatsapp"></i>WhatsApp</button>
+      <button class="hud-btn" onclick="window.enviarEmail()"><i class="ti ti-mail"></i>E-mail</button>
+      <button class="hud-btn amber" onclick="window.copiarLista()"><i class="ti ti-copy"></i>Copiar texto</button>
+      <button class="hud-btn danger" style="margin-left:auto" onclick="window.fecharModalLista()"><i class="ti ti-x"></i>Fechar</button>
+    </div>
+  </div>
+</div>
+
+<!-- MATRIX RAIN -->
+<script>
+(function(){
+  const canvas = document.getElementById('matrix-canvas');
+  if(!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  const CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ<>[]{}|/\\#@$%&*';
+  const FONT_SIZE = 14;
+  const CYAN  = '#00d4ff';
+  const CYAN2 = '#0088aa';
+  const WHITE = '#e0f8ff';
+
+  let cols, drops;
+
+  function resize(){
+    canvas.width  = canvas.offsetWidth;
+    canvas.height = canvas.offsetHeight;
+    cols  = Math.floor(canvas.width / FONT_SIZE);
+    drops = Array.from({length: cols}, () => Math.random() * -100);
+  }
+
+  function draw(){
+    // Fade trail
+    ctx.fillStyle = 'rgba(2, 13, 26, 0.18)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.font = FONT_SIZE + 'px Share Tech Mono, monospace';
+
+    for(let i = 0; i < drops.length; i++){
+      const char = CHARS[Math.floor(Math.random() * CHARS.length)];
+      const y = drops[i] * FONT_SIZE;
+      const x = i * FONT_SIZE;
+
+      // Head of the drop — bright white
+      if(drops[i] > 0 && Math.random() > 0.9){
+        ctx.fillStyle = WHITE;
+        ctx.shadowColor = CYAN;
+        ctx.shadowBlur  = 8;
+      } else {
+        // Trail
+        const alpha = Math.random() * 0.5 + 0.5;
+        ctx.fillStyle = drops[i] % 2 === 0 ? CYAN : CYAN2;
+        ctx.shadowColor = CYAN;
+        ctx.shadowBlur  = 4;
+        ctx.globalAlpha = alpha;
+      }
+
+      ctx.fillText(char, x, y);
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur  = 0;
+
+      // Reset drop randomly at bottom
+      if(y > canvas.height && Math.random() > 0.975){
+        drops[i] = 0;
+      }
+      drops[i] += 0.5;
+    }
+  }
+
+  resize();
+  window.addEventListener('resize', resize);
+  setInterval(draw, 40);
+})();
+
+<!-- Matrix rain no login -->
+<script>
+(function(){
+  const canvas=document.getElementById('matrix-canvas');
+  if(!canvas) return;
+  const ctx=canvas.getContext('2d');
+  const CHARS='アイウエオカキクケコ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const FS=14; let cols,drops;
+  function resize(){canvas.width=canvas.offsetWidth||window.innerWidth;canvas.height=canvas.offsetHeight||window.innerHeight;cols=Math.floor(canvas.width/FS);drops=Array.from({length:cols},()=>Math.random()*-100);}
+  resize(); window.addEventListener('resize',resize);
+  setInterval(()=>{ctx.fillStyle='rgba(2,13,26,0.18)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.font=FS+'px Share Tech Mono,monospace';for(let i=0;i<drops.length;i++){ctx.fillStyle=Math.random()>0.95?'#e0f8ff':(drops[i]%2===0?'#00d4ff':'#0088aa');ctx.globalAlpha=0.6+Math.random()*0.4;ctx.fillText(CHARS[Math.floor(Math.random()*CHARS.length)],i*FS,drops[i]*FS);ctx.globalAlpha=1;if(drops[i]*FS>canvas.height&&Math.random()>0.975)drops[i]=0;drops[i]+=0.5;}},40);
+})();
+</script>
+
+<!-- Módulo principal ORION -->
+<script type="module" src="js/auth.js"></script>
+<script type="module" src="js/app.js"></script>
+<script type="module" src="js/lista.js"></script>
+<script type="module" src="js/voz.js"></script>
+</body>
+</html>
