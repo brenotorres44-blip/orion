@@ -269,7 +269,8 @@ window.registrarUsuario = async function() {
     const status = email === ADMIN_EMAIL ? 'ativo'  : 'pendente';
     const cred   = await createUserWithEmailAndPassword(auth, email, senha);
     const uid    = cred.user.uid;
-    await fsSet('usuarios', uid, { nome, email, setor: setor||'', nivel, ativo: email === ADMIN_EMAIL, status, criado: ts(), ultimoAcesso: '—', lgpdConsentimento: true, lgpdData: ts() });
+    const qrData = `ORION_USER:${uid}:${nome}`;
+    await fsSet('usuarios', uid, { nome, email, setor: setor||'', nivel, ativo: email === ADMIN_EMAIL, status, criado: ts(), ultimoAcesso: '—', lgpdConsentimento: true, lgpdData: ts(), qrData });
     if(nivel !== 'admin') await fsSet('solicitacoes', uid, { uid, nome, email, setor: setor||'', motivo, nivel, status: 'pendente', criado: ts(), lgpdConsentimento: true });
     errEl.style.display = 'none';
     sucEl.innerHTML = nivel === 'admin'
