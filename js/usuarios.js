@@ -52,21 +52,51 @@ export async function renderTabelaUsuarios() {
   const tbody = document.getElementById('tabela-usuarios'); if(!tbody) return;
   tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text-dim);text-align:center;padding:16px">Carregando...</td></tr>';
   setUsuarios(await fsGetAll('usuarios'));
-  const isAdmin = window.usuarioAtual?.nivel === 'admin';
+
+  // Busca usuarioAtual de todas as fontes possíveis
+  const { usuarioAtual: uAtual } = await import('./utils.js');
+  const me = uAtual || window.usuarioAtual;
+  const isAdmin = me?.nivel === 'admin' || me?.nivelReal === 'admin';
+
   try { const sols = await fsGetAll('solicitacoes'); const pend = sols.filter(s => s.status === 'pendente').length; const badge = document.getElementById('badge-sol'); if(badge) { badge.textContent = pend; badge.style.display = pend > 0 ? '' : 'none'; } } catch(e) {}
+
   tbody.innerHTML = usuarios.length ? usuarios.map(u => {
-    const isSelf=u.id===window.usuarioAtual?.uid, isFixed=u.email===ADMIN_EMAIL, isPend=u.status==='pendente';
+    const isSelf  = u.id === me?.uid;
+    const isFixed = u.email === ADMIN_EMAIL;
+    const isPend  = u.status === 'pendente';
     if(isPend && !isAdmin) return '';
-    const plejCell = u.planejador ? `<span style="color:var(--green);font-size:11px;font-weight:700">✓ ${u.plejSetor||'Sim'}</span>` : `<span style="color:var(--text-dim);font-size:11px">—</span>`;
+
+    const plejCell = u.planejador
+      ? `<span style="color:var(--green);font-size:11px;font-weight:700">✓ ${u.plejSetor||'Sim'}</span>`
+      : `<span style="color:var(--text-dim);font-size:11px">—</span>`;
+
+    // Botões de ação
+    let acoes = '';
+    if(isFixed) {
+      acoes = '<span style="color:var(--red);font-size:10px;letter-spacing:1px">★ PROTEGIDO</span>';
+    } else if(isAdmin) {
+      const btnEditar  = `<button class="hud-btn" style="padding:5px 12px;font-size:11px" onclick="window.editarUsuario('${u.id}')"><i class="ti ti-pencil"></i>Editar</button>`;
+      const btnStatus  = `<button class="hud-btn amber" style="padding:5px 12px;font-size:11px" onclick="window.toggleStatusUsuario('${u.id}',${u.ativo})" title="${u.ativo?'Desativar usuário':'Ativar usuário'}"><i class="ti ti-${u.ativo?'player-pause':'player-play'}"></i>${u.ativo?'Desativar':'Ativar'}</button>`;
+      const btnExcluir = !isSelf ? `<button class="hud-btn danger" style="padding:5px 12px;font-size:11px" onclick="window.excluirUsuario('${u.id}')"><i class="ti ti-trash"></i>Excluir</button>` : '';
+      acoes = btnEditar + btnStatus + btnExcluir;
+    } else {
+      acoes = '<span style="color:var(--text-dim);font-size:11px">—</span>';
+    }
+
     return `<tr style="${isPend?'opacity:0.7':''}">
-      <td style="font-weight:600">${u.nome}${isSelf?' <span style="color:var(--cyan);font-size:10px">(você)</span>':''}${isFixed?' <span style="color:var(--red);font-size:10px">★ ADMIN</span>':''}${isPend?' <span style="color:var(--amber);font-size:10px">⏳ pendente</span>':''}</td>
+      <td style="font-weight:600">
+        ${u.nome}
+        ${isSelf  ? '<span style="color:var(--cyan);font-size:10px;margin-left:4px">(você)</span>'    : ''}
+        ${isFixed ? '<span style="color:var(--red);font-size:10px;margin-left:4px">★ ADMIN</span>'   : ''}
+        ${isPend  ? '<span style="color:var(--amber);font-size:10px;margin-left:4px">⏳ pendente</span>' : ''}
+      </td>
       <td style="font-family:var(--mono);color:var(--text-dim);font-size:12px">${u.email||'—'}</td>
       <td style="color:var(--text-dim);font-size:12px">${u.setor||'—'}</td>
       <td><span class="nivel-badge nivel-${u.nivel}">${u.nivel}</span></td>
       <td>${plejCell}</td>
       <td><span class="${u.ativo?'status-ativo':'status-inativo'}">${u.ativo?'● Ativo':'○ Inativo'}</span></td>
       <td style="color:var(--text-dim);font-size:12px">${u.ultimoAcesso||'—'}</td>
-      <td><div class="action-btns">${isAdmin && !isFixed ? `<button class="hud-btn" style="padding:5px 9px" onclick="window.editarUsuario('${u.id}')">✎</button><button class="hud-btn amber" style="padding:5px 9px" onclick="window.toggleStatusUsuario('${u.id}',${u.ativo})">${u.ativo?'⏸':'▶'}</button>${!isSelf?`<button class="hud-btn danger" style="padding:5px 9px" onclick="window.excluirUsuario('${u.id}')">✕</button>`:''}` : isAdmin && isFixed ? '<span style="color:var(--red);font-size:10px">Protegido</span>' : '<span style="color:var(--text-dim);font-size:11px">—</span>'}</div></td>
+      <td><div class="action-btns" style="gap:6px;flex-wrap:wrap">${acoes}</div></td>
     </tr>`;
   }).filter(Boolean).join('') : '<tr><td colspan="8" style="color:var(--text-dim);text-align:center;padding:20px">Nenhum usuário.</td></tr>';
 }
