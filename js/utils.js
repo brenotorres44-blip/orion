@@ -20,9 +20,9 @@ export let currentGavId    = null;
 export const ADMIN_EMAIL = 'brenotorres44@gmail.com';
 
 export const PERMISSOES = {
-  admin:    ['dashboard','armarios','itens','movimentos','historico','voz','esp32','acesso'],
-  operador: ['dashboard','armarios','itens','movimentos','historico','voz'],
-  consulta: ['dashboard','historico','voz']
+  admin:    ['dashboard','armarios','itens','movimentos','historico','voz','esp32','acesso','retiradas','crachas'],
+  operador: ['dashboard','armarios','itens','movimentos','historico','voz','retiradas'],
+  consulta: ['dashboard','historico','voz','retiradas']
 };
 
 // Setters para módulos que precisam atualizar o estado
