@@ -202,6 +202,12 @@
     <button class="side-btn" onclick="window.showPanel('esp32')" data-panel="esp32">
       <i class="ti ti-cpu"></i><span>ESP32</span>
     </button>
+    <button class="side-btn" onclick="window.showPanel('retiradas')" data-panel="retiradas">
+      <i class="ti ti-clipboard-list"></i><span>Retiradas</span>
+    </button>
+    <button class="side-btn" onclick="window.showPanel('crachas')" data-panel="crachas">
+      <i class="ti ti-id-badge"></i><span>Crachás</span>
+    </button>
     <div class="side-divider"></div>
     <button class="side-btn" onclick="window.showPanel('acesso')" data-panel="acesso">
       <i class="ti ti-shield-lock"></i><span>Acesso</span>
@@ -221,10 +227,121 @@
     <div style="font-size:10px;letter-spacing:3px;color:var(--text-dim);text-transform:uppercase;margin-bottom:4px">Central de controle</div>
     <div style="font-size:22px;font-weight:700;color:var(--cyan);letter-spacing:2px" id="home-greeting">Bem-vindo</div>
   </div>
+
+  <!-- BOTÕES GRANDES DE RETIRADA E DEVOLUÇÃO -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:28px">
+    <div onclick="window.abrirRetirada('retirar')" style="background:var(--bg2);border:2px solid var(--amber);padding:32px 20px;display:flex;flex-direction:column;align-items:center;gap:14px;cursor:pointer;transition:all 0.25s;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%)" onmouseover="this.style.background='rgba(255,170,0,0.08)';this.style.boxShadow='0 0 30px rgba(255,170,0,0.2)'" onmouseout="this.style.background='var(--bg2)';this.style.boxShadow='none'">
+      <i class="ti ti-arrow-up-circle" style="font-size:52px;color:var(--amber)"></i>
+      <div style="font-size:15px;font-weight:700;letter-spacing:3px;color:var(--amber);text-transform:uppercase">Retirar</div>
+      <div style="font-size:11px;color:var(--text-dim);text-align:center;letter-spacing:1px">Escanear crachá<br>e retirar ferramenta</div>
+    </div>
+    <div onclick="window.abrirRetirada('devolver')" style="background:var(--bg2);border:2px solid var(--green);padding:32px 20px;display:flex;flex-direction:column;align-items:center;gap:14px;cursor:pointer;transition:all 0.25s;clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%)" onmouseover="this.style.background='rgba(0,255,136,0.06)';this.style.boxShadow='0 0 30px rgba(0,255,136,0.15)'" onmouseout="this.style.background='var(--bg2)';this.style.boxShadow='none'">
+      <i class="ti ti-arrow-down-circle" style="font-size:52px;color:var(--green)"></i>
+      <div style="font-size:15px;font-weight:700;letter-spacing:3px;color:var(--green);text-transform:uppercase">Devolver</div>
+      <div style="font-size:11px;color:var(--text-dim);text-align:center;letter-spacing:1px">Escanear crachá<br>e devolver ferramenta</div>
+    </div>
+  </div>
+
   <!-- Stats rápidos -->
   <div class="stat-row" id="home-stats"></div>
   <!-- Quadrantes de módulos -->
   <div id="home-modules" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px;margin-top:8px"></div>
+</div>
+
+<!-- MODAL RETIRADA / DEVOLUÇÃO -->
+<div id="ret-modal" style="position:fixed;inset:0;background:rgba(5,13,26,0.95);z-index:7000;display:none;align-items:center;justify-content:center">
+  <div style="background:var(--bg2);border:1px solid var(--border-hi);width:95%;max-width:560px;max-height:90vh;overflow-y:auto;clip-path:polygon(0 0,calc(100% - 20px) 0,100% 20px,100% 100%,20px 100%,0 calc(100% - 20px))">
+
+    <!-- Header -->
+    <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+      <div id="ret-modal-titulo" style="font-size:13px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:var(--amber)">Retirar Ferramenta</div>
+      <button onclick="window.fecharRetirada()" style="background:none;border:none;color:var(--text-dim);font-size:22px;cursor:pointer;line-height:1">✕</button>
+    </div>
+
+    <!-- STEP 1: Scanner QR Code -->
+    <div id="ret-step-scan" style="padding:24px">
+      <div style="font-size:10px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase;margin-bottom:16px;font-weight:700">① Identificar operador</div>
+      <!-- Viewfinder da câmera -->
+      <div style="position:relative;width:100%;max-width:320px;margin:0 auto 16px;aspect-ratio:1;background:#000;border:2px solid var(--border-hi)">
+        <video id="ret-video" style="width:100%;height:100%;object-fit:cover" playsinline muted></video>
+        <canvas id="ret-canvas" style="display:none"></canvas>
+        <!-- Mira HUD -->
+        <div style="position:absolute;inset:0;pointer-events:none">
+          <div style="position:absolute;top:20px;left:20px;width:40px;height:40px;border-top:2px solid var(--cyan);border-left:2px solid var(--cyan)"></div>
+          <div style="position:absolute;top:20px;right:20px;width:40px;height:40px;border-top:2px solid var(--cyan);border-right:2px solid var(--cyan)"></div>
+          <div style="position:absolute;bottom:20px;left:20px;width:40px;height:40px;border-bottom:2px solid var(--cyan);border-left:2px solid var(--cyan)"></div>
+          <div style="position:absolute;bottom:20px;right:20px;width:40px;height:40px;border-bottom:2px solid var(--cyan);border-right:2px solid var(--cyan)"></div>
+        </div>
+      </div>
+      <div id="ret-scan-instrucao" style="text-align:center;font-size:12px;color:var(--cyan);letter-spacing:1px;margin-bottom:16px">Aponte o crachá para a câmera</div>
+      <!-- Fallback manual -->
+      <div id="ret-manual-wrap" style="display:none;border-top:1px solid var(--border);padding-top:16px">
+        <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;letter-spacing:1px">Ou busque o operador manualmente:</div>
+        <div style="display:flex;gap:8px">
+          <input class="hud-input" id="ret-manual-input" placeholder="Nome ou ID do operador" style="flex:1">
+          <button class="hud-btn" onclick="window.confirmarManual()" style="padding:10px 16px"><i class="ti ti-search"></i></button>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:12px">
+        <button onclick="document.getElementById('ret-manual-wrap').style.display=''" style="background:none;border:none;color:var(--text-dim);font-size:11px;cursor:pointer;letter-spacing:1px">Câmera não funciona? Usar busca manual</button>
+      </div>
+    </div>
+
+    <!-- STEP 2A: Selecionar ferramenta -->
+    <div id="ret-step-ferramenta" style="padding:24px;display:none">
+      <div style="font-size:10px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase;margin-bottom:4px;font-weight:700">② Selecionar ferramenta</div>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px">Operador: <span id="ret-operador-nome" style="color:var(--amber);font-weight:700"></span></div>
+      <input class="hud-input" id="ret-busca" placeholder="Digite o nome da ferramenta..." oninput="window.buscarFerramenta()" style="margin-bottom:8px">
+      <div id="ret-resultados" style="background:var(--bg3);border:1px solid var(--border);max-height:240px;overflow-y:auto;margin-bottom:12px"></div>
+      <!-- Quantidade -->
+      <div id="ret-qty-wrap" style="display:none;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <label class="field-label">Quantidade</label>
+          <input class="hud-input" id="ret-qty" type="number" min="1" value="1" style="width:80px">
+          <span id="ret-qty-max" style="font-size:11px;color:var(--text-dim)"></span>
+        </div>
+      </div>
+      <div class="field-group" style="margin-bottom:16px">
+        <label class="field-label">Observação (opcional)</label>
+        <input class="hud-input" id="ret-obs" placeholder="ex: Manutenção linha 3">
+      </div>
+      <button class="hud-btn amber" id="ret-btn-confirmar" onclick="window.confirmarRetirada()" style="width:100%;justify-content:center;padding:14px">
+        <i class="ti ti-arrow-up-circle"></i>Confirmar retirada
+      </button>
+    </div>
+
+    <!-- STEP 2B: Devolver -->
+    <div id="ret-step-devolver" style="padding:24px;display:none">
+      <div style="font-size:10px;letter-spacing:2px;color:var(--green);text-transform:uppercase;margin-bottom:4px;font-weight:700">② Ferramentas em uso</div>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px">Operador: <span id="ret-dev-operador" style="color:var(--green);font-weight:700"></span></div>
+      <div id="ret-dev-lista"></div>
+    </div>
+
+    <!-- STEP 3: Confirmação -->
+    <div id="ret-step-confirmacao" style="display:none"></div>
+  </div>
+</div>
+
+<!-- PAINEL RETIRADAS (admin) -->
+<div id="panel-retiradas" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-clipboard-list"></i>Registro de Retiradas</div>
+    <div class="hud-table-wrap">
+      <table class="hud-table">
+        <thead><tr><th>Ferramenta</th><th>Operador</th><th>Qtd</th><th>Saída</th><th>Retorno</th><th>Status</th></tr></thead>
+        <tbody id="ret-tabela-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- PAINEL CRACHÁS (admin) -->
+<div id="panel-crachas" class="panel">
+  <div class="hud-card">
+    <div class="hud-card-title"><i class="ti ti-id-badge"></i>Crachás com QR Code</div>
+    <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px">Imprima os crachás e entregue aos operadores para uso no sistema de retirada.</div>
+    <div id="crachas-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px"></div>
+  </div>
 </div>
 
 <!-- DASHBOARD -->
@@ -642,5 +759,7 @@
 <script type="module" src="js/app.js"></script>
 <script type="module" src="js/lista.js"></script>
 <script type="module" src="js/voz.js"></script>
+<script type="module" src="js/retirada.js"></script>
+<script type="module" src="js/crachas.js"></script>
 </body>
 </html>
