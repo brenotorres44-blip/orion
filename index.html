@@ -123,16 +123,51 @@ async function fsDeleteAll(col)        {
 // ══════════════════════════════════════════════
 onAuthStateChanged(auth, async fireUser => {
   if (fireUser) {
-    // Busca perfil do usuário no Firestore
     const perfil = await getDoc(docRef('usuarios', fireUser.uid));
     if (perfil.exists()) {
-      usuarioAtual = { uid: fireUser.uid, email: fireUser.email, ...perfil.data() };
-      // Atualiza último acesso
+      const dados = perfil.data();
+
+      // Bloqueia usuários pendentes ou inativos
+      if (dados.status === 'pendente') {
+        await signOut(auth);
+        mostrarLogin();
+        mostrarMsgLogin('⏳ Seu cadastro está aguardando aprovação do administrador.');
+        return;
+      }
+      if (!dados.ativo) {
+        await signOut(auth);
+        mostrarLogin();
+        mostrarMsgLogin('⛔ Sua conta foi desativada. Entre em contato com o administrador.');
+        return;
+      }
+
+      // Garante que admin fixo sempre é admin
+      const nivel = fireUser.email === ADMIN_EMAIL ? 'admin' : (dados.nivel || 'operador');
+      if (fireUser.email === ADMIN_EMAIL && dados.nivel !== 'admin') {
+        await fsSet('usuarios', fireUser.uid, { nivel: 'admin' });
+      }
+
+      usuarioAtual = { uid: fireUser.uid, email: fireUser.email, ...dados, nivel };
       await fsSet('usuarios', fireUser.uid, { ultimoAcesso: ts() });
     } else {
-      // Primeiro login — cria perfil admin
-      usuarioAtual = { uid: fireUser.uid, email: fireUser.email, nome: 'Administrador', nivel: 'admin' };
-      await fsSet('usuarios', fireUser.uid, { nome:'Administrador', nivel:'admin', ativo:true, criado:ts(), ultimoAcesso:ts(), email:fireUser.email });
+      // Primeiro login (Google) — admin fixo vira admin, resto vira pendente aguardando aprovação
+      const nivel  = fireUser.email === ADMIN_EMAIL ? 'admin'    : 'operador';
+      const status = fireUser.email === ADMIN_EMAIL ? 'ativo'    : 'pendente';
+      const ativo  = fireUser.email === ADMIN_EMAIL;
+      usuarioAtual = { uid: fireUser.uid, email: fireUser.email,
+        nome: fireUser.displayName || fireUser.email.split('@')[0], nivel };
+      await fsSet('usuarios', fireUser.uid, {
+        nome: usuarioAtual.nome, email: fireUser.email,
+        nivel, ativo, status,
+        criado: ts(), ultimoAcesso: ts(), lgpdConsentimento: false
+      });
+      // Se for Google e não for admin, bloqueia e manda preencher registro
+      if(fireUser.email !== ADMIN_EMAIL) {
+        await signOut(auth);
+        mostrarLogin();
+        mostrarMsgLogin('⏳ Sua conta está aguardando aprovação. Entre em contato com o administrador.');
+        return;
+      }
     }
     mostrarApp();
   } else {
@@ -140,6 +175,11 @@ onAuthStateChanged(auth, async fireUser => {
     mostrarLogin();
   }
 });
+
+function mostrarMsgLogin(msg) {
+  const el = document.getElementById('login-erro');
+  if(el) { el.textContent = msg; el.style.display = 'block'; el.style.color = 'var(--amber)'; }
+}
 
 // ══════════════════════════════════════════════
 //  LOGIN / LOGOUT
@@ -363,6 +403,296 @@ function updateCounters() {
 // ══════════════════════════════════════════════
 //  DASHBOARD
 // ══════════════════════════════════════════════
+// ══════════════════════════════════════════════
+//  REGISTRO DE USUÁRIOS — LGPD
+// ══════════════════════════════════════════════
+const ADMIN_EMAIL = 'brenotorres44@gmail.com';
+
+window.mostrarTelaRegistro = function() {
+  document.getElementById('login-overlay').style.display = 'none';
+  document.getElementById('registro-overlay').style.display = 'flex';
+  iniciarMatrixReg();
+}
+
+window.voltarLogin = function() {
+  document.getElementById('registro-overlay').style.display = 'none';
+  document.getElementById('login-overlay').style.display = 'flex';
+  ['reg-nome','reg-email','reg-setor','reg-senha','reg-senha2','reg-motivo'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
+  const lgpd = document.getElementById('reg-lgpd'); if(lgpd) lgpd.checked = false;
+  const err  = document.getElementById('reg-erro');   if(err)  err.style.display = 'none';
+  const suc  = document.getElementById('reg-sucesso');if(suc)  suc.style.display = 'none';
+}
+
+window.registrarUsuario = async function() {
+  const nome   = document.getElementById('reg-nome')?.value.trim();
+  const email  = document.getElementById('reg-email')?.value.trim().toLowerCase();
+  const setor  = document.getElementById('reg-setor')?.value.trim();
+  const senha  = document.getElementById('reg-senha')?.value;
+  const senha2 = document.getElementById('reg-senha2')?.value;
+  const motivo = document.getElementById('reg-motivo')?.value.trim();
+  const lgpd   = document.getElementById('reg-lgpd')?.checked;
+  const errEl  = document.getElementById('reg-erro');
+  const sucEl  = document.getElementById('reg-sucesso');
+
+  const mostrarErro = msg => { errEl.textContent = msg; errEl.style.display = 'block'; sucEl.style.display = 'none'; };
+
+  if(!nome || !email || !senha)   { mostrarErro('Preencha todos os campos obrigatórios.'); return; }
+  if(senha !== senha2)            { mostrarErro('As senhas não conferem.'); return; }
+  if(senha.length < 6)            { mostrarErro('A senha deve ter no mínimo 6 caracteres.'); return; }
+  if(!lgpd)                       { mostrarErro('Você precisa aceitar os termos da LGPD para continuar.'); return; }
+  if(!motivo)                     { mostrarErro('Informe a justificativa de acesso.'); return; }
+
+  const btn = document.querySelector('#registro-overlay .hud-btn.green-btn');
+  if(btn) { btn.innerHTML = '<i class="ti ti-loader"></i>Processando...'; btn.disabled = true; }
+
+  try {
+    // Define nível: admin fixo só para o e-mail do Breno
+    const nivel  = email === ADMIN_EMAIL ? 'admin' : 'operador';
+    const status = email === ADMIN_EMAIL ? 'ativo'  : 'pendente';
+
+    // Cria conta no Firebase Auth
+    const cred = await createUserWithEmailAndPassword(auth, email, senha);
+    const uid  = cred.user.uid;
+
+    // Salva perfil no Firestore
+    await fsSet('usuarios', uid, {
+      nome, email, setor: setor||'', nivel, ativo: email === ADMIN_EMAIL,
+      status, // pendente até admin aprovar (exceto admin fixo)
+      criado: ts(), ultimoAcesso: '—',
+      lgpdConsentimento: true,
+      lgpdData: ts()
+    });
+
+    // Salva solicitação para o admin revisar (exceto para o próprio admin)
+    if(nivel !== 'admin') {
+      await fsSet('solicitacoes', uid, {
+        uid, nome, email, setor: setor||'', motivo,
+        nivel, status: 'pendente',
+        criado: ts(), lgpdConsentimento: true
+      });
+    }
+
+    errEl.style.display = 'none';
+
+    if(nivel === 'admin') {
+      sucEl.innerHTML = `<i class="ti ti-circle-check" style="font-size:20px;display:block;margin-bottom:6px;color:var(--green)"></i>
+        <b style="color:var(--green)">Conta criada!</b><br>Faça login para acessar.`;
+    } else {
+      sucEl.innerHTML = `<i class="ti ti-clock" style="font-size:20px;display:block;margin-bottom:6px;color:var(--amber)"></i>
+        <b style="color:var(--amber)">Solicitação enviada!</b><br>
+        Aguarde a aprovação do administrador.<br>
+        <span style="font-size:10px;color:var(--text-dim)">Você será notificado quando seu acesso for liberado.</span>`;
+    }
+    sucEl.style.display = 'block';
+
+    if(btn) { btn.innerHTML = '<i class="ti ti-arrow-left"></i>Voltar ao login'; btn.disabled = false; btn.onclick = () => window.voltarLogin(); }
+
+  } catch(e) {
+    const msgs = {
+      'auth/email-already-in-use': 'Este e-mail já possui uma conta cadastrada.',
+      'auth/invalid-email':        'E-mail inválido.',
+      'auth/weak-password':        'Senha muito fraca.'
+    };
+    mostrarErro(msgs[e.code] || 'Erro ao criar conta: ' + e.message);
+    if(btn) { btn.innerHTML = '<i class="ti ti-user-check"></i>Solicitar acesso'; btn.disabled = false; }
+  }
+}
+
+// ── Matrix no canvas de registro ──────────────
+function iniciarMatrixReg() {
+  const canvas = document.getElementById('matrix-canvas-reg');
+  if(!canvas || canvas._iniciado) return;
+  canvas._iniciado = true;
+  const ctx = canvas.getContext('2d');
+  const CHARS = 'アイウエオカキクケコ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const FS = 14;
+  let cols, drops;
+  function resize() {
+    canvas.width  = canvas.offsetWidth  || window.innerWidth;
+    canvas.height = canvas.offsetHeight || window.innerHeight;
+    cols  = Math.floor(canvas.width / FS);
+    drops = Array.from({length: cols}, () => Math.random() * -100);
+  }
+  resize();
+  window.addEventListener('resize', resize);
+  setInterval(() => {
+    ctx.fillStyle = 'rgba(2,13,26,0.18)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.font = FS + 'px Share Tech Mono,monospace';
+    for(let i=0;i<drops.length;i++){
+      ctx.fillStyle = Math.random()>0.95 ? '#e0f8ff' : (drops[i]%2===0?'#00d4ff':'#0088aa');
+      ctx.globalAlpha = 0.6 + Math.random()*0.4;
+      ctx.fillText(CHARS[Math.floor(Math.random()*CHARS.length)], i*FS, drops[i]*FS);
+      ctx.globalAlpha = 1;
+      if(drops[i]*FS > canvas.height && Math.random()>0.975) drops[i]=0;
+      drops[i]+=0.5;
+    }
+  }, 40);
+}
+
+// ══════════════════════════════════════════════
+//  GESTÃO DE SOLICITAÇÕES (painel admin)
+// ══════════════════════════════════════════════
+window.trocarTabAcesso = function(tab) {
+  document.getElementById('sub-usuarios').style.display      = tab==='usuarios' ? '' : 'none';
+  document.getElementById('sub-solicitacoes').style.display  = tab==='solicitacoes' ? '' : 'none';
+  document.getElementById('tab-usuarios').classList.toggle('active',   tab==='usuarios');
+  document.getElementById('tab-solicitacoes').classList.toggle('active', tab==='solicitacoes');
+  if(tab === 'solicitacoes') renderTabelaSolicitacoes();
+}
+
+async function renderTabelaSolicitacoes() {
+  const tbody = document.getElementById('tabela-solicitacoes'); if(!tbody) return;
+  tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text-dim);text-align:center;padding:16px">Carregando...</td></tr>';
+  let sols = [];
+  try { sols = await fsGetAll('solicitacoes'); } catch(e) {}
+  sols.sort((a,b) => (b.criado||'').localeCompare(a.criado||''));
+
+  // Badge de pendentes
+  const pendentes = sols.filter(s => s.status === 'pendente').length;
+  const badge = document.getElementById('badge-sol');
+  if(badge) { badge.textContent = pendentes; badge.style.display = pendentes > 0 ? '' : 'none'; }
+
+  tbody.innerHTML = sols.length ? sols.map(s => {
+    const statusEl = s.status === 'pendente'
+      ? `<span style="color:var(--amber);font-weight:600">● Pendente</span>`
+      : s.status === 'aprovado' || s.status === 'aprovado_auto'
+      ? `<span style="color:var(--green);font-weight:600">✓ Aprovado</span>`
+      : `<span style="color:var(--red);font-weight:600">✕ Rejeitado</span>`;
+
+    const acoes = s.status === 'pendente' ? `
+      <div class="action-btns">
+        <button class="hud-btn green-btn" style="padding:5px 10px;font-size:11px" onclick="window.aprovarSolicitacao('${s.uid}','${s.nome}')"><i class="ti ti-check"></i>Aprovar</button>
+        <button class="hud-btn danger" style="padding:5px 10px;font-size:11px" onclick="window.rejeitarSolicitacao('${s.uid}','${s.nome}')"><i class="ti ti-x"></i>Rejeitar</button>
+      </div>` : `<span style="color:var(--text-dim);font-size:11px">${s.status==='aprovado_auto'?'Auto-aprovado':''}</span>`;
+
+    return `<tr>
+      <td style="font-weight:600">${s.nome}</td>
+      <td style="font-family:var(--mono);font-size:12px;color:var(--text-dim)">${s.email}</td>
+      <td style="color:var(--text-dim)">${s.setor||'—'}</td>
+      <td style="font-size:11px;color:var(--text-dim);max-width:180px">${s.motivo||'—'}</td>
+      <td style="font-size:11px;color:var(--text-dim)">${s.criado||'—'}</td>
+      <td>${statusEl}</td>
+      <td>${acoes}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="7" style="color:var(--text-dim);text-align:center;padding:20px">Nenhuma solicitação ainda.</td></tr>';
+}
+
+window.aprovarSolicitacao = async function(uid, nome) {
+  await fsSet('usuarios',      uid, { ativo: true, nivel: 'operador' });
+  await fsSet('solicitacoes',  uid, { status: 'aprovado', aprovadoPor: usuarioAtual?.nome, aprovadoEm: ts() });
+  toast(`${nome} aprovado(a) como Operador ✓`, '');
+  renderTabelaSolicitacoes();
+  renderTabelaUsuarios();
+}
+
+window.rejeitarSolicitacao = async function(uid, nome) {
+  openModal('Rejeitar solicitação', `Rejeitar acesso de "${nome}"? O usuário não conseguirá entrar no sistema.`, 'Rejeitar', async () => {
+    await fsSet('usuarios',     uid, { ativo: false });
+    await fsSet('solicitacoes', uid, { status: 'rejeitado', rejeitadoPor: usuarioAtual?.nome, rejeitadoEm: ts() });
+    toast(`Solicitação de ${nome} rejeitada`, 'amber');
+    renderTabelaSolicitacoes();
+  });
+}
+
+// Atualiza badge ao abrir painel de acesso
+const _origRenderTabelaUsuarios = renderTabelaUsuarios;
+async function renderTabelaUsuarios() {
+  await _origRenderTabelaUsuarios();
+  // Atualiza badge de solicitações pendentes
+  try {
+    const sols = await fsGetAll('solicitacoes');
+    const pend = sols.filter(s => s.status === 'pendente').length;
+    const badge = document.getElementById('badge-sol');
+    if(badge) { badge.textContent = pend; badge.style.display = pend > 0 ? '' : 'none'; }
+  } catch(e) {}
+}
+function gerarTextoLista() {
+  const lows = itens.filter(i => i.min > 0 && i.qty < i.min);
+  if(!lows.length) return null;
+
+  const dataHora = new Date().toLocaleString('pt-BR');
+  const usuario  = usuarioAtual?.nome || 'Sistema ORION';
+
+  let texto = `╔══════════════════════════════════════════╗\n`;
+  texto    += `║     SOLICITAÇÃO DE REPOSIÇÃO — ORION     ║\n`;
+  texto    += `╚══════════════════════════════════════════╝\n\n`;
+  texto    += `Data: ${dataHora}\n`;
+  texto    += `Solicitado por: ${usuario}\n\n`;
+
+  const obs = document.getElementById('lista-obs')?.value.trim();
+  if(obs) texto += `Observação: ${obs}\n\n`;
+
+  texto += `─────────────────────────────────────────\n`;
+  texto += ` ITEM                  QTD ATUAL  MÍNIMO  FALTAM\n`;
+  texto += `─────────────────────────────────────────\n`;
+
+  lows.forEach(i => {
+    const arm  = armNome(i.armId);
+    const gav  = gavLabel(i.armId, i.gavId);
+    const falt = i.min - i.qty;
+    const nome = i.nome.padEnd(22).slice(0,22);
+    const qtd  = String(i.qty).padStart(9);
+    const min  = String(i.min).padStart(7);
+    const fl   = String(falt).padStart(7);
+    texto += ` ${nome} ${qtd}  ${min}  ${fl}\n`;
+    texto += `   📍 ${arm} · ${gav}\n`;
+  });
+
+  texto += `─────────────────────────────────────────\n`;
+  texto += `Total de itens críticos: ${lows.length}\n\n`;
+  texto += `Por favor, providenciar reposição o mais breve possível.\n`;
+  texto += `\n— Sistema ORION de Organização Inteligente`;
+  return { texto, lows };
+}
+
+window.abrirEnvioLista = function() {
+  const lows = itens.filter(i => i.min > 0 && i.qty < i.min);
+  if(!lows.length) { toast('Nenhum item crítico no momento ✓', ''); return; }
+
+  const result = gerarTextoLista();
+  document.getElementById('lista-preview').textContent = result.texto;
+  document.getElementById('modal-lista').style.display = 'flex';
+}
+
+window.fecharModalLista = function() {
+  document.getElementById('modal-lista').style.display = 'none';
+}
+
+window.copiarLista = function() {
+  const result = gerarTextoLista();
+  if(!result) return;
+  navigator.clipboard.writeText(result.texto).then(() => {
+    toast('Lista copiada para a área de transferência ✓', '');
+  }).catch(() => {
+    // fallback
+    const ta = document.createElement('textarea');
+    ta.value = result.texto;
+    document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy');
+    document.body.removeChild(ta);
+    toast('Lista copiada ✓', '');
+  });
+}
+
+window.enviarWhatsApp = function() {
+  const result = gerarTextoLista();
+  if(!result) return;
+  const encoded = encodeURIComponent(result.texto);
+  window.open(`https://wa.me/?text=${encoded}`, '_blank');
+}
+
+window.enviarEmail = function() {
+  const result = gerarTextoLista();
+  if(!result) return;
+  const para    = document.getElementById('lista-email')?.value.trim() || '';
+  const assunto = encodeURIComponent(document.getElementById('lista-assunto')?.value || 'Solicitação de reposição — ORION');
+  const corpo   = encodeURIComponent(result.texto);
+  window.open(`mailto:${para}?subject=${assunto}&body=${corpo}`, '_blank');
+}
+
 function renderHome() {
   const hora = new Date().getHours();
   const saud = hora < 12 ? 'Bom dia' : hora < 18 ? 'Boa tarde' : 'Boa noite';
@@ -372,7 +702,7 @@ function renderHome() {
   const totalItens = itens.length;
   const totalQty   = itens.reduce((a,i)=>a+(i.qty||0),0);
   const totalVal   = itens.reduce((a,i)=>a+(i.qty||0)*(i.preco||0),0);
-  const lowCount   = itens.filter(i=>i.min>0&&i.qty<=i.min).length;
+  const lowCount   = itens.filter(i=>i.min>0&&i.qty<i.min).length;
 
   const hs = document.getElementById('home-stats');
   if(hs) hs.innerHTML = `
@@ -408,7 +738,7 @@ function renderDashboard() {
   const totalItens = itens.length;
   const totalQty   = itens.reduce((a,i)=>a+(i.qty||0),0);
   const totalVal   = itens.reduce((a,i)=>a+(i.qty||0)*(i.preco||0),0);
-  const lowCount   = itens.filter(i=>i.min>0&&i.qty<=i.min).length;
+  const lowCount   = itens.filter(i=>i.min>0&&i.qty<i.min).length;
 
   document.getElementById('stats-row').innerHTML = `
     <div class="stat-box" style="--w:${Math.min(100,armarios.length*20)}%"><div class="stat-label">Armários</div><div class="stat-value">${armarios.length}</div><div class="stat-unit">cadastrados</div></div>
@@ -436,16 +766,18 @@ function renderDashboard() {
     ? last8.map(m=>logHtml(m)).join('')
     : '<div style="color:var(--text-dim);font-size:12px;padding:12px">Nenhuma movimentação.</div>';
 
-  const lows = itens.filter(i=>i.min>0&&i.qty<=i.min);
+  const lows = itens.filter(i=>i.min>0&&i.qty<i.min);
   document.getElementById('low-stock-body').innerHTML = lows.length
     ? lows.map(i=>`<tr>
         <td style="font-weight:600">${i.nome}</td>
         <td><span style="color:${armById(i.armId)?.cor||'var(--cyan)'};font-weight:600">${armNome(i.armId)}</span></td>
         <td><span class="gaveta-badge">G${gavById(i.armId,i.gavId)?.num||'?'}</span></td>
-        <td class="qty-low">${i.qty}</td><td>${i.min}</td>
+        <td class="qty-low">${i.qty}</td>
+        <td style="color:var(--text-dim)">${i.min}</td>
+        <td style="color:var(--red);font-weight:700">−${i.min - i.qty}</td>
         <td><button class="hud-btn amber" style="padding:5px 12px;font-size:11px" onclick="window.abrirMovimento('${i.id}')">+ Entrada</button></td>
       </tr>`).join('')
-    : '<tr><td colspan="6" style="color:var(--green);text-align:center;padding:16px">✓ Todos os itens estão OK</td></tr>';
+    : '<tr><td colspan="7" style="color:var(--green);text-align:center;padding:16px">✓ Todos os itens estão OK</td></tr>';
 }
 
 function logHtml(m) {
@@ -574,7 +906,7 @@ function renderArmarios(){
     const cor=arm.cor||'#00d4ff';
     const gavetasHtml=(arm.gavetas||[]).map(g=>{
       const gItens=itens.filter(i=>i.armId===arm.id&&i.gavId===g.id);
-      const gLow=gItens.some(i=>i.min>0&&i.qty<=i.min);
+      const gLow=gItens.some(i=>i.min>0&&i.qty<i.min);
       const nomeGav=g.nome?`<span class="gav-name">${g.nome}</span>`:'';
       return `<div class="gav-chip" onclick="window.abrirGaveta('${arm.id}','${g.id}')" title="${g.nome||'Gaveta '+g.num}">
         ${gLow?'<div class="gav-alert"></div>':''}
@@ -634,7 +966,7 @@ function renderDetalheGaveta(){
   const gavItens=itens.filter(i=>i.armId===currentArmId&&i.gavId===currentGavId);
   const tbody=document.getElementById('detail-tbody');
   tbody.innerHTML=gavItens.length?gavItens.map(i=>{
-    const low=i.min>0&&i.qty<=i.min;
+    const low=i.min>0&&i.qty<i.min;
     return `<tr>
       <td style="font-weight:600;color:${low?'var(--red)':'var(--text)'}">${i.nome}</td>
       <td class="${low?'qty-low':'qty-ok'}">${i.qty}</td>
@@ -759,7 +1091,7 @@ function renderTabela(){
   );
   const tbody=document.getElementById('tabela-itens');
   tbody.innerHTML=filtered.length?filtered.map(i=>{
-    const low=i.min>0&&i.qty<=i.min;
+    const low=i.min>0&&i.qty<i.min;
     const cor=armById(i.armId)?.cor||'var(--cyan)';
     return `<tr>
       <td style="font-weight:600;color:${low?'var(--red)':'var(--text)'}">${i.nome}${low?'<span class="led red" style="width:6px;height:6px;margin-left:6px"></span>':''}</td>
@@ -866,7 +1198,7 @@ function renderHistorico(){
   const filtered=itens.filter(i=>(!q||i.nome.toLowerCase().includes(q)||(i.cat||'').toLowerCase().includes(q))&&(!af||i.armId===af));
   const tbody=document.getElementById('hist-body');
   tbody.innerHTML=filtered.map(i=>{
-    const low=i.min>0&&i.qty<=i.min;
+    const low=i.min>0&&i.qty<i.min;
     const status=i.qty===0?'<span style="color:var(--red)">SEM ESTOQUE</span>':low?'<span style="color:var(--amber)">BAIXO</span>':'<span style="color:var(--green)">OK</span>';
     const cor=armById(i.armId)?.cor||'var(--cyan)';
     return `<tr>
@@ -947,58 +1279,118 @@ function clearGavetaDisplay(){
 }
 
 function processarVoz(texto){
-  const t=texto.toLowerCase().trim();
-  document.getElementById('voice-transcript').textContent='"'+texto+'"';
-  let best=null,bestScore=0;
-  itens.forEach(item=>{
-    const n=item.nome.toLowerCase(); let score=0;
-    n.split(' ').forEach(p=>{if(t.includes(p))score+=p.length;});
-    t.split(' ').forEach(p=>{if(n.includes(p))score+=p.length;});
-    if(score>bestScore){bestScore=score;best=item;}
+  const t = texto.toLowerCase().trim();
+  document.getElementById('voice-transcript').textContent = '"'+texto+'"';
+
+  // Busca TODOS os itens que correspondem, com score
+  const resultados = [];
+  itens.forEach(item => {
+    const n = item.nome.toLowerCase();
+    let score = 0;
+    n.split(' ').forEach(p => { if(t.includes(p)) score += p.length; });
+    t.split(' ').forEach(p => { if(n.includes(p)) score += p.length; });
+    if(score >= 2) resultados.push({ item, score });
   });
-  const rv=document.getElementById('voice-result');
-  rv.style.display='';
-  if(best&&bestScore>=2){
-    const arm=armById(best.armId); const gav=gavById(best.armId,best.gavId);
-    const cor=arm?.cor||'#00d4ff';
-    clearGavetaDisplay();
-    document.getElementById('vr-title').innerHTML='◉ Item localizado';
-    document.getElementById('vr-content').innerHTML=`
-      <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px">
-        <div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Item</div><div style="font-size:16px;font-weight:700;color:var(--cyan)">${best.nome}</div></div>
-        <div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Armário</div><div style="font-size:15px;font-weight:700;color:${cor}">${arm?.nome||'?'}</div></div>
-        <div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Local</div><div style="color:var(--text)">${arm?.local||'—'}</div></div>
-        <div><div style="font-size:10px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase">Estoque</div><div style="color:${best.qty>best.min?'var(--green)':'var(--red)'}">${best.qty} unid.</div></div>
-      </div>`;
-    document.getElementById('gaveta-display').innerHTML=(arm?.gavetas||[]).map(g=>{
-      const isTarget=g.id===best.gavId;
-      return `<div class="gd-box ${isTarget?'lit':''}">
-        <div class="gd-num">${g.num}</div>
-        <div class="gd-label">${g.nome||'Gaveta'}</div>
-        <div class="gd-led"></div>
+
+  // Ordena por score e agrupa por nome
+  resultados.sort((a,b) => b.score - a.score);
+  const melhorScore = resultados[0]?.score || 0;
+  // Pega todos com score igual ao melhor (mesmo item em gavetas diferentes)
+  const encontrados = resultados.filter(r => r.score >= melhorScore * 0.7).map(r => r.item);
+
+  const rv = document.getElementById('voice-result');
+  rv.style.display = '';
+  clearGavetaDisplay();
+
+  if(encontrados.length > 0) {
+    document.getElementById('vr-title').innerHTML = `◉ ${encontrados.length > 1 ? encontrados.length+' locais encontrados' : 'Item localizado'}`;
+
+    // Monta card para cada resultado
+    const cardsHtml = encontrados.map((item, idx) => {
+      const arm = armById(item.armId);
+      const gav = gavById(item.armId, item.gavId);
+      const cor = arm?.cor || '#00d4ff';
+      return `<div style="background:var(--bg3);border:1px solid ${cor}40;padding:12px 16px;margin-bottom:8px;border-left:3px solid ${cor}">
+        <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:center">
+          <div style="font-size:18px;font-weight:700;color:var(--cyan);min-width:120px">${item.nome}</div>
+          <div><div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px">Armário</div><div style="font-weight:700;color:${cor}">${arm?.nome||'?'}</div></div>
+          <div><div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px">Gaveta</div><div style="font-weight:700;color:var(--amber)">G${gav?.num||'?'} ${gav?.nome?'· '+gav.nome:''}</div></div>
+          <div><div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px">Local</div><div style="color:var(--text)">${arm?.local||'—'}</div></div>
+          <div><div style="font-size:9px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px">Estoque</div><div style="color:${item.qty>item.min?'var(--green)':'var(--red)'};font-weight:700">${item.qty} unid.</div></div>
+        </div>
       </div>`;
     }).join('');
-    toast(`Localizado: ${arm?.nome} · G${gav?.num||'?'}`,'');
-    if('speechSynthesis' in window){
-      const u=new SpeechSynthesisUtterance(`${best.nome} está no armário ${arm?.nome||''}, gaveta ${gav?.num||''}`);
-      u.lang='pt-BR'; speechSynthesis.speak(u);
+
+    document.getElementById('vr-content').innerHTML = cardsHtml;
+
+    // Monta display de gavetas — acende TODAS as gavetas com o item
+    // Agrupa por armário
+    const armsEncontrados = [...new Set(encontrados.map(i => i.armId))];
+    let gavetasHtml = '';
+    armsEncontrados.forEach(armId => {
+      const arm = armById(armId);
+      const itensDesseBraco = encontrados.filter(i => i.armId === armId);
+      const gavIdsTarget = itensDesseBraco.map(i => i.gavId);
+      gavetasHtml += `<div style="margin-bottom:12px">
+        <div style="font-size:9px;color:${arm?.cor||'var(--cyan)'};letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;font-weight:700">${arm?.nome||'?'}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          ${(arm?.gavetas||[]).map(g => `
+            <div class="gd-box ${gavIdsTarget.includes(g.id)?'lit':''}">
+              <div class="gd-num">${g.num}</div>
+              <div class="gd-label">${g.nome||'Gaveta'}</div>
+              <div class="gd-led"></div>
+            </div>`).join('')}
+        </div>
+      </div>`;
+    });
+    document.getElementById('gaveta-display').innerHTML = gavetasHtml;
+
+    // Monta fala com todos os locais
+    let frase = '';
+    if(encontrados.length === 1) {
+      const arm = armById(encontrados[0].armId);
+      const gav = gavById(encontrados[0].armId, encontrados[0].gavId);
+      frase = `${encontrados[0].nome} está no armário ${arm?.nome||''}, gaveta ${gav?.num||''}`;
+    } else {
+      const nomeItem = encontrados[0].nome;
+      const locais = encontrados.map(i => {
+        const arm = armById(i.armId);
+        const gav = gavById(i.armId, i.gavId);
+        return `armário ${arm?.nome||''}, gaveta ${gav?.num||''}`;
+      }).join(' e também no ');
+      frase = `${nomeItem} foi encontrado em ${encontrados.length} locais: ${locais}`;
     }
-    return best;
+
+    // Fala o resultado
+    if('speechSynthesis' in window) {
+      speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(frase);
+      u.lang   = 'pt-BR';
+      u.pitch  = 0.85;
+      u.rate   = 0.95;
+      speechSynthesis.speak(u);
+    }
+
+    toast(`${encontrados.length} local(is) encontrado(s)`, '');
+    return encontrados;
+
   } else {
-    clearGavetaDisplay();
-    document.getElementById('vr-title').innerHTML='✕ Não encontrado';
-    document.getElementById('vr-content').innerHTML=`<div style="color:var(--text-dim);font-size:14px">Nenhum item corresponde a "<span style="color:var(--amber)">${texto}</span>".</div>`;
-    document.getElementById('gaveta-display').innerHTML='';
-    toast('Item não encontrado','amber');
+    document.getElementById('vr-title').innerHTML = '✕ Não encontrado';
+    document.getElementById('vr-content').innerHTML = `<div style="color:var(--text-dim);font-size:14px">Nenhum item corresponde a "<span style="color:var(--amber)">${texto}</span>".</div>`;
+    document.getElementById('gaveta-display').innerHTML = '';
+    toast('Item não encontrado', 'amber');
     return null;
   }
 }
 
 async function processarVozComESP(texto){
-  const best=processarVoz(texto);
-  if(!best||!espOnline) return;
-  const res=await espPost('/localizar',{armId:best.armId,gavId:best.gavId,abrirTrava:false});
-  if(res?.ok) toast(`◉ ESP32: LED G${gavById(best.armId,best.gavId)?.num} aceso ✓`,'');
+  const encontrados = processarVoz(texto);
+  if(!encontrados?.length || !espOnline) return;
+  // Aciona LED em todas as gavetas encontradas
+  for(const item of encontrados) {
+    await espPost('/localizar', { armId: item.armId, gavId: item.gavId, abrirTrava: false });
+  }
+  toast(`◉ ESP32: ${encontrados.length} LED(s) aceso(s) ✓`, '');
 }
 
 // ══════════════════════════════════════════════
@@ -1223,26 +1615,108 @@ window.cancelarEdicaoUsuario=function(){
 
 async function renderTabelaUsuarios(){
   const tbody=document.getElementById('tabela-usuarios'); if(!tbody) return;
-  tbody.innerHTML='<tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:16px">Carregando...</td></tr>';
+  tbody.innerHTML='<tr><td colspan="7" style="color:var(--text-dim);text-align:center;padding:16px">Carregando...</td></tr>';
   usuarios=await fsGetAll('usuarios');
-  const isAdmin=usuarioAtual?.nivel==='admin';
-  tbody.innerHTML=usuarios.length?usuarios.map(u=>{
-    const isSelf=u.id===usuarioAtual?.uid;
+
+  // Separa pendentes dos ativos
+  const pendentes = usuarios.filter(u => u.status === 'pendente');
+  const ativos    = usuarios.filter(u => u.status !== 'pendente');
+  const isAdmin   = usuarioAtual?.nivel === 'admin';
+
+  // Mostra seção de pendentes se houver
+  const pendWrap = document.getElementById('pendentes-wrap');
+  if(pendWrap) {
+    if(pendentes.length && isAdmin) {
+      pendWrap.style.display = '';
+      document.getElementById('pendentes-count').textContent = pendentes.length;
+      document.getElementById('tabela-pendentes').innerHTML = pendentes.map(u => `<tr>
+        <td style="font-weight:600">${u.nome}</td>
+        <td style="color:var(--text-dim);font-size:12px">${u.email||'—'}</td>
+        <td style="color:var(--text-dim);font-size:11px">${u.criado||'—'}</td>
+        <td style="font-size:11px;color:var(--text-dim)">${u.lgpdConsent?'✓ Aceito':'—'}</td>
+        <td><div class="action-btns">
+          <button class="hud-btn green-btn" style="padding:5px 12px;font-size:11px" onclick="window.aprovarUsuario('${u.id}')"><i class="ti ti-check"></i>Aprovar</button>
+          <button class="hud-btn danger" style="padding:5px 12px;font-size:11px" onclick="window.rejeitarUsuario('${u.id}')"><i class="ti ti-x"></i>Rejeitar</button>
+        </div></td>
+      </tr>`).join('');
+    } else {
+      pendWrap.style.display = 'none';
+    }
+  }
+
+  tbody.innerHTML=ativos.length?ativos.map(u=>{
+    const isSelf  = u.id===usuarioAtual?.uid;
+    const isFixed = u.email === ADMIN_EMAIL;
     return `<tr>
-      <td style="font-weight:600">${u.nome}${isSelf?' <span style="color:var(--cyan);font-size:10px">(você)</span>':''}</td>
-      <td style="font-family:var(--mono);color:var(--text-dim);font-size:12px">${u.email||u.login||'—'}</td>
+      <td style="font-weight:600">${u.nome}${isSelf?' <span style="color:var(--cyan);font-size:10px">(você)</span>':''}${isFixed?' <span style="color:var(--red);font-size:10px">★ADMIN FIXO</span>':''}</td>
+      <td style="font-family:var(--mono);color:var(--text-dim);font-size:12px">${u.email||'—'}</td>
       <td><span class="nivel-badge nivel-${u.nivel}">${u.nivel}</span></td>
       <td><span class="${u.ativo?'status-ativo':'status-inativo'}">${u.ativo?'● Ativo':'○ Inativo'}</span></td>
       <td style="color:var(--text-dim);font-size:12px">${u.ultimoAcesso||'—'}</td>
+      <td style="font-size:11px;color:var(--text-dim)">${u.lgpdConsent?'<span style="color:var(--green)">✓ Aceito</span>':'—'}</td>
       <td><div class="action-btns">
-        ${isAdmin?`
+        ${isAdmin&&!isFixed?`
           <button class="hud-btn" style="padding:5px 9px" onclick="window.editarUsuario('${u.id}')">✎</button>
           <button class="hud-btn amber" style="padding:5px 9px" onclick="window.toggleStatusUsuario('${u.id}',${u.ativo})">${u.ativo?'⏸':'▶'}</button>
           ${!isSelf?`<button class="hud-btn danger" style="padding:5px 9px" onclick="window.excluirUsuario('${u.id}')">✕</button>`:''}
-        `:'<span style="color:var(--text-dim);font-size:11px">—</span>'}
+        `:isAdmin&&isFixed?'<span style="color:var(--red);font-size:10px">Protegido</span>':'<span style="color:var(--text-dim);font-size:11px">—</span>'}
       </div></td>
     </tr>`;
-  }).join(''):'<tr><td colspan="6" style="color:var(--text-dim);text-align:center;padding:20px">Nenhum usuário.</td></tr>';
+  }).join(''):'<tr><td colspan="7" style="color:var(--text-dim);text-align:center;padding:20px">Nenhum usuário.</td></tr>';
+}
+
+window.aprovarUsuario = async function(id) {
+  await fsSet('usuarios', id, { status: 'ativo', ativo: true, nivel: 'operador', aprovadoPor: usuarioAtual?.nome, aprovadoEm: ts() });
+  usuarios = await fsGetAll('usuarios');
+  renderTabelaUsuarios();
+  toast('Usuário aprovado como operador ✓', '');
+}
+
+window.rejeitarUsuario = function(id) {
+  const u = usuarios.find(u => u.id === id);
+  openModal('Rejeitar cadastro', `Rejeitar e excluir o cadastro de "${u?.nome}"?`, 'Rejeitar', async () => {
+    await fsDelete('usuarios', id);
+    // Remove também do Firebase Auth (só possível via Admin SDK, então desativa)
+    usuarios = await fsGetAll('usuarios');
+    renderTabelaUsuarios();
+    toast('Cadastro rejeitado', 'amber');
+  });
+}
+
+// Garante que admin fixo nunca perde o nível
+window.salvarUsuario = async function(){
+  const nome  = document.getElementById('ac-nome').value.trim();
+  const email = document.getElementById('ac-login').value.trim().toLowerCase();
+  const senha = document.getElementById('ac-senha').value;
+  const senha2= document.getElementById('ac-senha2').value;
+  const nivel = email === ADMIN_EMAIL ? 'admin' : document.getElementById('ac-nivel').value;
+  const ativo = document.getElementById('ac-status').value === 'ativo';
+  if(!nome||!email){toast('Nome e e-mail são obrigatórios','red');return;}
+  if(senha&&senha!==senha2){toast('Senhas não conferem','red');return;}
+  if(senha&&senha.length<6){toast('Senha mínimo 6 caracteres','red');return;}
+
+  if(editandoUserId){
+    const upd={nome,nivel,ativo,status:'ativo'};
+    await fsSet('usuarios',editandoUserId,upd);
+    const idx=usuarios.findIndex(u=>u.id===editandoUserId);
+    if(idx>=0) usuarios[idx]={...usuarios[idx],...upd};
+    toast('Usuário atualizado ✓');
+  } else {
+    if(!senha){toast('Informe uma senha','red');return;}
+    try{
+      const cred=await createUserWithEmailAndPassword(auth,email,senha);
+      await fsSet('usuarios',cred.user.uid,{
+        nome,email,nivel,ativo:true,status:'ativo',
+        criado:ts(),ultimoAcesso:'—',lgpdConsent:false
+      });
+      usuarios.push({id:cred.user.uid,nome,email,nivel,ativo:true,status:'ativo',criado:ts()});
+      toast('Usuário cadastrado ✓ · E-mail: '+email);
+    }catch(e){
+      const msgs={'auth/email-already-in-use':'E-mail já cadastrado','auth/invalid-email':'E-mail inválido','auth/weak-password':'Senha muito fraca'};
+      toast(msgs[e.code]||'Erro: '+e.message,'red'); return;
+    }
+  }
+  cancelarEdicaoUsuario(); renderTabelaUsuarios();
 }
 
 </script>
@@ -1413,7 +1887,7 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
         </div>
         <div class="field-group"><label class="field-label">Senha</label>
           <div style="position:relative">
-            <input class="hud-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')fazerLogin()" style="padding-right:44px">
+            <input class="hud-input" id="login-pass" type="password" placeholder="••••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter')window.fazerLogin()" style="padding-right:44px">
             <button onclick="window.toggleSenhaLogin()" id="btn-toggle-pass" style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px"><i class="ti ti-eye"></i></button>
           </div>
         </div>
@@ -1426,12 +1900,7 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
           <div style="flex:1;height:1px;background:var(--border)"></div>
         </div>
 
-        <button onclick="window.loginGoogle()" style="
-          width:100%;padding:12px;background:white;border:none;border-radius:2px;
-          display:flex;align-items:center;justify-content:center;gap:10px;
-          font-family:var(--sans);font-size:13px;font-weight:600;
-          color:#3c4043;cursor:pointer;transition:box-shadow 0.2s;letter-spacing:0.5px;
-        " onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.3)'" onmouseout="this.style.boxShadow='none'">
+        <button onclick="window.loginGoogle()" style="width:100%;padding:12px;background:white;border:none;border-radius:2px;display:flex;align-items:center;justify-content:center;gap:10px;font-family:var(--sans);font-size:13px;font-weight:600;color:#3c4043;cursor:pointer;transition:box-shadow 0.2s;letter-spacing:0.5px;" onmouseover="this.style.boxShadow='0 2px 8px rgba(0,0,0,0.3)'" onmouseout="this.style.boxShadow='none'">
           <svg width="18" height="18" viewBox="0 0 48 48">
             <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
             <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
@@ -1440,9 +1909,69 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
           </svg>
           Entrar com Google
         </button>
+
+        <div style="text-align:center;padding-top:4px;border-top:1px solid var(--border)">
+          <span style="font-size:11px;color:var(--text-dim)">Não tem conta? </span>
+          <button onclick="window.mostrarTelaRegistro()" style="background:none;border:none;color:var(--cyan);font-size:11px;cursor:pointer;font-family:var(--sans);font-weight:600;letter-spacing:0.5px;text-decoration:underline">Solicitar acesso</button>
+        </div>
       </div>
     </div>
     <div style="text-align:center;margin-top:16px;font-size:10px;color:var(--text-dim);letter-spacing:1px">Acesso restrito · ORION v1.0 · Firebase</div>
+  </div>
+</div>
+
+<!-- TELA DE REGISTRO -->
+<div id="registro-overlay" style="position:fixed;inset:0;background:#020d1a;z-index:9001;display:none;flex-direction:column;align-items:center;justify-content:center;overflow-y:auto;overflow-x:hidden">
+  <canvas id="matrix-canvas-reg" style="position:absolute;inset:0;width:100%;height:100%;opacity:0.35;pointer-events:none"></canvas>
+  <div style="position:relative;width:100%;max-width:460px;padding:20px 24px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="font-family:var(--sans);font-size:26px;font-weight:700;color:var(--cyan);letter-spacing:6px;text-transform:uppercase">ORI<span style="color:var(--amber)">ON</span></div>
+      <div style="font-size:10px;color:var(--text-dim);letter-spacing:2px;margin-top:4px;text-transform:uppercase">Solicitação de acesso</div>
+    </div>
+    <div style="background:rgba(9,22,40,0.93);border:1px solid var(--border);padding:24px;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));backdrop-filter:blur(4px)">
+
+      <div style="font-size:10px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase;font-weight:700;margin-bottom:18px"><i class="ti ti-user-plus" style="margin-right:6px"></i>Criar nova conta</div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div class="field-group"><label class="field-label">Nome completo</label>
+          <input class="hud-input" id="reg-nome" placeholder="Seu nome completo" autocomplete="name">
+        </div>
+        <div class="field-group"><label class="field-label">E-mail</label>
+          <input class="hud-input" id="reg-email" type="email" placeholder="seu@email.com" autocomplete="email">
+        </div>
+        <div class="field-group"><label class="field-label">Setor / Área</label>
+          <input class="hud-input" id="reg-setor" placeholder="ex: Manutenção, Produção...">
+        </div>
+        <div class="field-group"><label class="field-label">Senha</label>
+          <input class="hud-input" id="reg-senha" type="password" placeholder="mínimo 6 caracteres">
+        </div>
+        <div class="field-group"><label class="field-label">Confirmar senha</label>
+          <input class="hud-input" id="reg-senha2" type="password" placeholder="repita a senha">
+        </div>
+        <div class="field-group"><label class="field-label">Justificativa de acesso</label>
+          <textarea class="hud-input" id="reg-motivo" placeholder="Por que você precisa de acesso ao sistema?" style="height:70px;resize:none;font-family:var(--sans)"></textarea>
+        </div>
+
+        <!-- LGPD -->
+        <div style="background:rgba(0,212,255,0.04);border:1px solid rgba(0,212,255,0.15);padding:12px;font-size:11px;color:var(--text-dim);line-height:1.6">
+          <div style="color:var(--cyan);font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px"><i class="ti ti-shield-check" style="margin-right:4px"></i>Proteção de Dados — LGPD</div>
+          Seus dados (nome, e-mail e setor) serão coletados exclusivamente para <b style="color:var(--text)">controle de acesso</b> ao sistema ORION. Não serão compartilhados com terceiros. Você pode solicitar a exclusão a qualquer momento ao administrador.
+          <div style="margin-top:8px">Base legal: <b style="color:var(--text)">Legítimo interesse</b> (Art. 7º, IX — Lei 13.709/2018).</div>
+        </div>
+
+        <!-- Checkbox consentimento -->
+        <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:12px;color:var(--text-dim)">
+          <input type="checkbox" id="reg-lgpd" style="margin-top:2px;accent-color:var(--cyan);width:15px;height:15px;flex-shrink:0">
+          <span>Li e concordo com o tratamento dos meus dados pessoais conforme descrito acima, nos termos da <b style="color:var(--cyan)">Lei Geral de Proteção de Dados (LGPD)</b>.</span>
+        </label>
+
+        <div id="reg-erro" style="font-size:12px;color:var(--red);display:none;text-align:center"></div>
+        <div id="reg-sucesso" style="font-size:12px;color:var(--green);display:none;text-align:center;line-height:1.6"></div>
+
+        <button class="hud-btn green-btn" onclick="window.registrarUsuario()" style="width:100%;justify-content:center;padding:12px"><i class="ti ti-user-check"></i>Solicitar acesso</button>
+        <button onclick="window.voltarLogin()" style="background:none;border:none;color:var(--text-dim);font-size:11px;cursor:pointer;font-family:var(--sans);text-align:center;width:100%;padding:4px"><i class="ti ti-arrow-left" style="margin-right:4px"></i>Voltar ao login</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1528,6 +2057,10 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
     <button class="side-btn" onclick="window.showPanel('acesso')" data-panel="acesso">
       <i class="ti ti-shield-lock"></i><span>Acesso</span>
     </button>
+    <button class="side-btn" onclick="window.showPanel('solicitacoes')" data-panel="solicitacoes">
+      <i class="ti ti-user-check"></i><span>Solicitações</span>
+      <span id="badge-sol" style="display:none;background:var(--red);color:white;font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;position:absolute;top:8px;right:8px"></span>
+    </button>
   </nav>
 
   <!-- CONTEÚDO -->
@@ -1552,8 +2085,11 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
     <div class="hud-card"><div class="hud-card-title"><i class="ti ti-building-warehouse"></i>Armários</div><div id="dash-arm-list"></div></div>
     <div class="hud-card"><div class="hud-card-title"><i class="ti ti-history"></i>Últimas movimentações</div><div class="log-list" id="dash-log" style="max-height:260px"></div></div>
   </div>
-  <div class="hud-card"><div class="hud-card-title"><i class="ti ti-alert-triangle"></i>Estoque crítico</div>
-    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Item</th><th>Armário</th><th>Gaveta</th><th>Qtd</th><th>Mín</th><th>Ação</th></tr></thead><tbody id="low-stock-body"></tbody></table></div>
+  <div class="hud-card"><div class="hud-card-title" style="justify-content:space-between">
+    <span style="display:flex;align-items:center;gap:8px"><i class="ti ti-alert-triangle"></i>Estoque crítico</span>
+    <button class="hud-btn amber" style="padding:5px 14px;font-size:11px" onclick="window.abrirEnvioLista()"><i class="ti ti-send"></i>Enviar lista ao planejador</button>
+  </div>
+    <div class="hud-table-wrap"><table class="hud-table"><thead><tr><th>Item</th><th>Armário</th><th>Gaveta</th><th>Qtd</th><th>Mín</th><th>Faltam</th><th>Ação</th></tr></thead><tbody id="low-stock-body"></tbody></table></div>
   </div>
 </div>
 
@@ -1729,43 +2265,66 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
 
 <!-- ACESSO -->
 <div id="panel-acesso" class="panel">
-  <div class="hud-card" style="margin-bottom:0">
-    <div class="hud-card-title" style="justify-content:space-between">
-      <span style="display:flex;align-items:center;gap:8px"><i class="ti ti-users"></i>Usuários cadastrados</span>
-      <button class="hud-btn green-btn" onclick="window.abrirFormUsuario()" style="padding:6px 14px;font-size:11px"><i class="ti ti-user-plus"></i>Novo usuário</button>
-    </div>
-    <div class="hud-table-wrap">
-      <table class="hud-table"><thead><tr><th>Nome</th><th>E-mail</th><th>Nível</th><th>Status</th><th>Último acesso</th><th>Ações</th></tr></thead><tbody id="tabela-usuarios"></tbody></table>
-    </div>
+
+  <!-- Abas -->
+  <div style="display:flex;gap:2px;margin-bottom:20px;border-bottom:1px solid var(--border)">
+    <button class="nav-btn active" id="tab-usuarios" onclick="window.trocarTabAcesso('usuarios')" style="padding:8px 18px;font-size:12px"><i class="ti ti-users"></i>Usuários</button>
+    <button class="nav-btn" id="tab-solicitacoes" onclick="window.trocarTabAcesso('solicitacoes')" style="padding:8px 18px;font-size:12px"><i class="ti ti-user-check"></i>Solicitações <span id="badge-sol" style="display:none;background:var(--red);color:white;border-radius:99px;padding:1px 6px;font-size:10px;margin-left:4px">0</span></button>
   </div>
-  <div id="form-usuario-wrap" style="display:none;animation:fadein 0.25s ease;margin-top:16px">
-    <div class="hud-card" style="border-color:var(--border-hi);margin-bottom:0">
+
+  <!-- Painel usuários -->
+  <div id="sub-usuarios">
+    <div class="hud-card" style="margin-bottom:0">
       <div class="hud-card-title" style="justify-content:space-between">
-        <span id="form-usuario-title" style="display:flex;align-items:center;gap:8px"><i class="ti ti-user-plus"></i>Novo usuário</span>
-        <button class="icon-btn danger" onclick="window.cancelarEdicaoUsuario()" style="font-size:16px">✕</button>
+        <span style="display:flex;align-items:center;gap:8px"><i class="ti ti-users"></i>Usuários cadastrados</span>
+        <button class="hud-btn green-btn" onclick="window.abrirFormUsuario()" style="padding:6px 14px;font-size:11px"><i class="ti ti-user-plus"></i>Novo usuário</button>
       </div>
-      <div class="hud-form">
-        <div class="field-group"><label class="field-label">Nome completo</label><input class="hud-input" id="ac-nome" placeholder="ex: João Silva" autocomplete="off"></div>
-        <div class="field-group"><label class="field-label">E-mail (login)</label><input class="hud-input" id="ac-login" type="email" placeholder="joao@email.com" autocomplete="off"></div>
-        <div class="field-group"><label class="field-label">Senha <span id="ac-senha-hint" style="color:var(--text-dim);font-size:10px;font-weight:400"></span></label><input class="hud-input" id="ac-senha" type="password" placeholder="mínimo 6 caracteres"></div>
-        <div class="field-group"><label class="field-label">Confirmar senha</label><input class="hud-input" id="ac-senha2" type="password" placeholder="repita a senha"></div>
-        <div class="field-group"><label class="field-label">Nível de acesso</label>
-          <select class="hud-select" id="ac-nivel">
-            <option value="admin">Admin — acesso total</option>
-            <option value="operador" selected>Operador — ver + movimentos</option>
-            <option value="consulta">Consulta — somente leitura</option>
-          </select>
-        </div>
-        <div class="field-group"><label class="field-label">Status</label>
-          <select class="hud-select" id="ac-status"><option value="ativo">Ativo</option><option value="inativo">Inativo</option></select>
-        </div>
+      <div class="hud-table-wrap">
+        <table class="hud-table"><thead><tr><th>Nome</th><th>E-mail</th><th>Setor</th><th>Nível</th><th>Status</th><th>Último acesso</th><th>Ações</th></tr></thead><tbody id="tabela-usuarios"></tbody></table>
       </div>
-      <div class="form-actions" style="margin-top:16px">
-        <button class="hud-btn" onclick="window.salvarUsuario()"><i class="ti ti-device-floppy"></i>Salvar usuário</button>
-        <button class="hud-btn amber" onclick="window.cancelarEdicaoUsuario()"><i class="ti ti-x"></i>Cancelar</button>
+    </div>
+    <div id="form-usuario-wrap" style="display:none;animation:fadein 0.25s ease;margin-top:16px">
+      <div class="hud-card" style="border-color:var(--border-hi);margin-bottom:0">
+        <div class="hud-card-title" style="justify-content:space-between">
+          <span id="form-usuario-title" style="display:flex;align-items:center;gap:8px"><i class="ti ti-user-plus"></i>Novo usuário</span>
+          <button class="icon-btn danger" onclick="window.cancelarEdicaoUsuario()" style="font-size:16px">✕</button>
+        </div>
+        <div class="hud-form">
+          <div class="field-group"><label class="field-label">Nome completo</label><input class="hud-input" id="ac-nome" placeholder="ex: João Silva" autocomplete="off"></div>
+          <div class="field-group"><label class="field-label">E-mail (login)</label><input class="hud-input" id="ac-login" type="email" placeholder="joao@email.com" autocomplete="off"></div>
+          <div class="field-group"><label class="field-label">Senha <span id="ac-senha-hint" style="color:var(--text-dim);font-size:10px;font-weight:400"></span></label><input class="hud-input" id="ac-senha" type="password" placeholder="mínimo 6 caracteres"></div>
+          <div class="field-group"><label class="field-label">Confirmar senha</label><input class="hud-input" id="ac-senha2" type="password" placeholder="repita a senha"></div>
+          <div class="field-group"><label class="field-label">Setor</label><input class="hud-input" id="ac-setor" placeholder="ex: Manutenção"></div>
+          <div class="field-group"><label class="field-label">Nível de acesso</label>
+            <select class="hud-select" id="ac-nivel">
+              <option value="admin">Admin — acesso total</option>
+              <option value="operador" selected>Operador — ver + movimentos</option>
+              <option value="consulta">Consulta — somente leitura</option>
+            </select>
+          </div>
+          <div class="field-group"><label class="field-label">Status</label>
+            <select class="hud-select" id="ac-status"><option value="ativo">Ativo</option><option value="inativo">Inativo</option></select>
+          </div>
+        </div>
+        <div class="form-actions" style="margin-top:16px">
+          <button class="hud-btn" onclick="window.salvarUsuario()"><i class="ti ti-device-floppy"></i>Salvar usuário</button>
+          <button class="hud-btn amber" onclick="window.cancelarEdicaoUsuario()"><i class="ti ti-x"></i>Cancelar</button>
+        </div>
       </div>
     </div>
   </div>
+
+  <!-- Painel solicitações -->
+  <div id="sub-solicitacoes" style="display:none">
+    <div class="hud-card" style="margin-bottom:0">
+      <div class="hud-card-title"><i class="ti ti-user-check"></i>Solicitações de acesso pendentes</div>
+      <div style="font-size:12px;color:var(--text-dim);margin-bottom:14px">Usuários que solicitaram acesso ao sistema. Aprove ou rejeite cada solicitação.</div>
+      <div class="hud-table-wrap">
+        <table class="hud-table"><thead><tr><th>Nome</th><th>E-mail</th><th>Setor</th><th>Justificativa</th><th>Data</th><th>Status</th><th>Ações</th></tr></thead><tbody id="tabela-solicitacoes"></tbody></table>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 </div><!-- /content-area -->
@@ -1782,6 +2341,43 @@ body::after{content:'';position:fixed;top:-100%;left:0;right:0;height:2px;backgr
     </div>
   </div>
 </div>
+<!-- MODAL ENVIO LISTA PLANEJADOR -->
+<div id="modal-lista" style="position:fixed;inset:0;background:rgba(5,13,26,0.92);z-index:6000;display:none;align-items:center;justify-content:center">
+  <div style="background:var(--bg2);border:1px solid var(--border-hi);padding:28px 32px;max-width:680px;width:95%;clip-path:polygon(0 0,calc(100% - 20px) 0,100% 20px,100% 100%,20px 100%,0 calc(100% - 20px));max-height:90vh;overflow-y:auto">
+    <div style="font-size:11px;letter-spacing:2px;color:var(--amber);text-transform:uppercase;margin-bottom:16px;font-weight:700;display:flex;align-items:center;gap:8px">
+      <i class="ti ti-send"></i>Enviar lista de reposição ao planejador
+    </div>
+
+    <!-- Destinatário e assunto -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+      <div class="field-group">
+        <label class="field-label">E-mail do planejador</label>
+        <input class="hud-input" id="lista-email" type="email" placeholder="planejador@empresa.com">
+      </div>
+      <div class="field-group">
+        <label class="field-label">Assunto</label>
+        <input class="hud-input" id="lista-assunto" value="Solicitação de reposição de ferramentas — ORION">
+      </div>
+      <div class="field-group" style="grid-column:span 2">
+        <label class="field-label">Observação (opcional)</label>
+        <input class="hud-input" id="lista-obs" placeholder="ex: Material urgente para linha de produção">
+      </div>
+    </div>
+
+    <!-- Preview da lista -->
+    <div style="font-size:10px;color:var(--cyan);letter-spacing:2px;text-transform:uppercase;font-weight:700;margin-bottom:8px">Itens críticos detectados</div>
+    <div id="lista-preview" style="background:var(--bg3);border:1px solid var(--border);padding:16px;font-family:var(--mono);font-size:12px;line-height:1.8;color:var(--text);max-height:280px;overflow-y:auto;white-space:pre-wrap"></div>
+
+    <!-- Métodos de envio -->
+    <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+      <button class="hud-btn green-btn" onclick="window.enviarWhatsApp()"><i class="ti ti-brand-whatsapp"></i>WhatsApp</button>
+      <button class="hud-btn" onclick="window.enviarEmail()"><i class="ti ti-mail"></i>E-mail</button>
+      <button class="hud-btn amber" onclick="window.copiarLista()"><i class="ti ti-copy"></i>Copiar texto</button>
+      <button class="hud-btn danger" style="margin-left:auto" onclick="window.fecharModalLista()"><i class="ti ti-x"></i>Fechar</button>
+    </div>
+  </div>
+</div>
+
 <!-- MATRIX RAIN -->
 <script>
 (function(){
