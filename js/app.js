@@ -16,7 +16,8 @@ import { renderTabelaUsuarios }         from './usuarios.js';
 const PANEL_NAMES = {
   home:'INÍCIO', dashboard:'DASHBOARD', armarios:'ARMÁRIOS', itens:'ITENS',
   movimentos:'MOVIMENTOS', historico:'HISTÓRICO', voz:'COMANDO DE VOZ',
-  esp32:'ESP32', acesso:'ACESSO'
+  esp32:'ESP32', acesso:'ACESSO', retiradas:'REGISTRO DE RETIRADAS',
+  crachas:'CRACHÁS QR CODE'
 };
 
 // ── Carregamento inicial dos dados ─────────────
@@ -53,6 +54,8 @@ window.showPanel = function(id) {
   if(id==='movimentos') { renderMovLog(); populateMovSelect(); }
   if(id==='historico')  renderHistorico();
   if(id==='esp32')      initPainelEsp32();
+  if(id==='retiradas')  window.renderPainelRetiradas?.();
+  if(id==='crachas')    window.renderPainelCrachas?.();
   if(id==='acesso')     renderTabelaUsuarios();
 }
 
