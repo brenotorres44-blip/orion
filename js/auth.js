@@ -1,3 +1,4 @@
+
 // ══════════════════════════════════════════════
 //  ORION — auth.js
 //  Login, logout, Google, registro LGPD,
@@ -40,9 +41,14 @@ onAuthStateChanged(auth, async fireUser => {
     const perfil = await getDoc(docRef('usuarios', fireUser.uid));
     if (perfil.exists()) {
       const dados = perfil.data();
-      if (dados.status === 'pendente') {
+      if (dados.status === 'pendente' && dados.nivel !== 'operador') {
         await signOut(auth); mostrarLogin();
         mostrarMsgLogin('⏳ Seu cadastro está aguardando aprovação do administrador.'); return;
+      }
+      // Ativa automaticamente usuários pendentes com nível operador (login Google)
+      if (dados.status === 'pendente') {
+        await fsSet('usuarios', fireUser.uid, { ativo: true, status: 'ativo' });
+        dados.status = 'ativo'; dados.ativo = true;
       }
       if (!dados.ativo) {
         await signOut(auth); mostrarLogin();
@@ -124,11 +130,11 @@ window.loginGoogle = async function() {
         setUsuarioAtual({ uid: fireUser.uid, email: fireUser.email, nome, nivel: 'admin', ativo: true });
         await fsSet('usuarios', fireUser.uid, { nome, email: fireUser.email, nivel: 'admin', ativo: true, status: 'ativo', criado: ts(), ultimoAcesso: ts(), lgpdConsentimento: true });
       } else {
-        await signOut(auth);
-        mostrarErroLogin('⏳ Sua conta foi criada e está aguardando aprovação do administrador.');
         const nome = fireUser.displayName || fireUser.email.split('@')[0];
-        await fsSet('usuarios', fireUser.uid, { nome, email: fireUser.email, nivel: 'operador', ativo: false, status: 'pendente', criado: ts(), ultimoAcesso: '—', lgpdConsentimento: false });
-        await fsSet('solicitacoes', fireUser.uid, { uid: fireUser.uid, nome, email: fireUser.email, setor: '', motivo: 'Login via Google', nivel: 'operador', status: 'pendente', criado: ts(), lgpdConsentimento: false });
+        const qrData = `ORION_USER:${fireUser.uid}:${nome}`;
+        await fsSet('usuarios', fireUser.uid, { nome, email: fireUser.email, nivel: 'operador', ativo: true, status: 'ativo', criado: ts(), ultimoAcesso: ts(), lgpdConsentimento: true, qrData });
+        setUsuarioAtual({ uid: fireUser.uid, email: fireUser.email, nome, nivel: 'operador', ativo: true });
+        mostrarApp();
         return;
       }
     }
