@@ -75,10 +75,11 @@ export async function renderTabelaUsuarios() {
     if(isFixed) {
       acoes = '<span style="color:var(--red);font-size:10px;letter-spacing:1px">★ PROTEGIDO</span>';
     } else if(isAdmin) {
+      const btnQR     = `<button class="hud-btn" style="padding:5px 12px;font-size:11px;border-color:var(--cyan);color:var(--cyan)" onclick="window.abrirQRUsuario('${u.id}','${u.nome}','${u.nivel}','${(u.qrData||'').replace(/'/g,'')}')" title="Ver QR Code do crachá"><i class="ti ti-qrcode"></i>QR</button>`;
       const btnEditar  = `<button class="hud-btn" style="padding:5px 12px;font-size:11px" onclick="window.editarUsuario('${u.id}')"><i class="ti ti-pencil"></i>Editar</button>`;
       const btnStatus  = `<button class="hud-btn amber" style="padding:5px 12px;font-size:11px" onclick="window.toggleStatusUsuario('${u.id}',${u.ativo})" title="${u.ativo?'Desativar usuário':'Ativar usuário'}"><i class="ti ti-${u.ativo?'player-pause':'player-play'}"></i>${u.ativo?'Desativar':'Ativar'}</button>`;
       const btnExcluir = !isSelf ? `<button class="hud-btn danger" style="padding:5px 12px;font-size:11px" onclick="window.excluirUsuario('${u.id}')"><i class="ti ti-trash"></i>Excluir</button>` : '';
-      acoes = btnEditar + btnStatus + btnExcluir;
+      acoes = btnQR + btnEditar + btnStatus + btnExcluir;
     } else {
       acoes = '<span style="color:var(--text-dim);font-size:11px">—</span>';
     }
@@ -200,3 +201,61 @@ window.cancelarEdicaoUsuario = function(){
 window.excluirUsuario = function(id){ if(id===window.usuarioAtual?.uid){toast('Não pode excluir o próprio usuário','red');return;} const user=usuarios.find(u=>u.id===id); openModal('Excluir usuário',`Excluir "${user?.nome}"?`,'Excluir',async()=>{ await fsDelete('usuarios',id); setUsuarios(usuarios.filter(u=>u.id!==id)); renderTabelaUsuarios(); toast('Usuário excluído','amber'); }); }
 
 window.toggleStatusUsuario = async function(id,ativoAtual){ if(id===window.usuarioAtual?.uid){toast('Não pode desativar o próprio usuário','red');return;} const novoAtivo=!ativoAtual; await fsSet('usuarios',id,{ativo:novoAtivo}); const idx=usuarios.findIndex(u=>u.id===id); if(idx>=0) usuarios[idx].ativo=novoAtivo; renderTabelaUsuarios(); toast(novoAtivo?'Usuário ativado ✓':'Usuário desativado','amber'); }
+
+// ── Modal QR Code ──────────────────────────────
+window.abrirQRUsuario = async function(userId, nome, nivel, qrDataParam) {
+  let qrData = qrDataParam;
+  if(!qrData) {
+    // Busca do Firestore se não veio no parâmetro
+    const { fsGetAll, fsSet: fsSt } = await import('./firebase.js');
+    const todos = await fsGetAll('usuarios');
+    const u = todos.find(x => x.id === userId);
+    qrData = u?.qrData || `ORION_USER:${userId}:${nome}`;
+    if(!u?.qrData) { try { await fsSt('usuarios', userId, { qrData }); } catch(e) {} }
+  }
+
+  // Guarda dados para impressão
+  window._qrPrintData = { nome, nivel, qrData };
+
+  document.getElementById('modal-qr-nome').textContent = nome;
+  const corNivel = nivel === 'admin' ? 'var(--red)' : nivel === 'operador' ? 'var(--cyan)' : 'var(--green)';
+  document.getElementById('modal-qr-nivel').innerHTML = `<span style="color:${corNivel}">${nivel.toUpperCase()}</span>`;
+  document.getElementById('modal-qr').style.display = 'flex';
+
+  // Limpa e gera QR
+  const qrDiv = document.getElementById('modal-qr-code');
+  qrDiv.innerHTML = '';
+
+  // Carrega lib QRCode
+  if(!window.QRCode) {
+    await new Promise(resolve => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+      s.onload = resolve; document.head.appendChild(s);
+    });
+  }
+  setTimeout(() => {
+    try {
+      new QRCode(qrDiv, { text: qrData, width: 160, height: 160, colorDark: '#000', colorLight: '#fff', correctLevel: QRCode.CorrectLevel.M });
+    } catch(e) { qrDiv.innerHTML = '<div style="color:red;font-size:12px">Erro ao gerar QR</div>'; }
+  }, 100);
+}
+
+window.fecharModalQR = function() {
+  document.getElementById('modal-qr').style.display = 'none';
+  document.getElementById('modal-qr-code').innerHTML = '';
+}
+
+window.imprimirQRModal = function() {
+  const d = window._qrPrintData; if(!d) return;
+  const canvas = document.querySelector('#modal-qr-code canvas');
+  const imgSrc = canvas ? canvas.toDataURL() : '';
+  const corNivel = d.nivel === 'admin' ? '#ff3b5c' : d.nivel === 'operador' ? '#00d4ff' : '#00ff88';
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head><title>Crachá — ${d.nome}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;700&display=swap" rel="stylesheet">
+  <style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Exo 2',sans-serif;background:#fff;display:flex;align-items:center;justify-content:center;min-height:100vh}.cracha{width:8.6cm;height:5.4cm;border:2px solid #050d1a;border-radius:10px;padding:14px 16px;display:flex;gap:14px;align-items:center}.qr-side img{width:110px;height:110px;border:1px solid #eee;border-radius:4px;padding:4px}.info-side{flex:1;display:flex;flex-direction:column;gap:6px}.logo{font-size:18px;font-weight:700;letter-spacing:4px;color:#050d1a}.logo span{color:#ffaa00}.divider{height:1px;background:#e0e0e0}.nome{font-size:14px;font-weight:700;color:#050d1a}.nivel{font-size:9px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:${corNivel};padding:2px 6px;border:1px solid ${corNivel};border-radius:3px;display:inline-block}.inst{font-size:8px;color:#aaa;margin-top:auto}@media print{body{min-height:auto}}</style>
+  </head><body><div class="cracha"><div class="qr-side">${imgSrc?`<img src="${imgSrc}">`:'<div style="width:110px;height:110px;background:#f5f5f5"></div>'}</div><div class="info-side"><div class="logo">ORI<span>ON</span></div><div class="divider"></div><div class="nome">${d.nome}</div><div><span class="nivel">${d.nivel.toUpperCase()}</span></div><div class="inst">Sistema de Organização Inteligente</div></div></div>
+  <script>window.onload=()=>setTimeout(()=>window.print(),300)<\/script></body></html>`);
+  win.document.close();
+}
