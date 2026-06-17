@@ -741,20 +741,6 @@
 })();
 </script>
 
-<script>
-(function(){
-  const canvas=document.getElementById('matrix-canvas');
-  if(!canvas) return;
-  const ctx=canvas.getContext('2d');
-  const CHARS='アイウエオカキクケコ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-  const FS=14; let cols,drops;
-  function resize(){canvas.width=canvas.offsetWidth||window.innerWidth;canvas.height=canvas.offsetHeight||window.innerHeight;cols=Math.floor(canvas.width/FS);drops=Array.from({length:cols},()=>Math.random()*-100);}
-  resize(); window.addEventListener('resize',resize);
-  setInterval(()=>{ctx.fillStyle='rgba(2,13,26,0.18)';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.font=FS+'px Share Tech Mono,monospace';for(let i=0;i<drops.length;i++){ctx.fillStyle=Math.random()>0.95?'#e0f8ff':(drops[i]%2===0?'#00d4ff':'#0088aa');ctx.globalAlpha=0.6+Math.random()*0.4;ctx.fillText(CHARS[Math.floor(Math.random()*CHARS.length)],i*FS,drops[i]*FS);ctx.globalAlpha=1;if(drops[i]*FS>canvas.height&&Math.random()>0.975)drops[i]=0;drops[i]+=0.5;}},40);
-})();
-</script>
-
-<!-- Módulo principal ORION -->
 <script type="module" src="js/auth.js"></script>
 <script type="module" src="js/app.js"></script>
 <script type="module" src="js/lista.js"></script>
