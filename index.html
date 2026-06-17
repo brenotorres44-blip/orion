@@ -205,9 +205,6 @@
     <button class="side-btn" onclick="window.showPanel('retiradas')" data-panel="retiradas">
       <i class="ti ti-clipboard-list"></i><span>Retiradas</span>
     </button>
-    <button class="side-btn" onclick="window.showPanel('crachas')" data-panel="crachas">
-      <i class="ti ti-id-badge"></i><span>Crachás</span>
-    </button>
     <div class="side-divider"></div>
     <button class="side-btn" onclick="window.showPanel('acesso')" data-panel="acesso">
       <i class="ti ti-shield-lock"></i><span>Acesso</span>
@@ -335,14 +332,6 @@
   </div>
 </div>
 
-<!-- PAINEL CRACHÁS (admin) -->
-<div id="panel-crachas" class="panel">
-  <div class="hud-card">
-    <div class="hud-card-title"><i class="ti ti-id-badge"></i>Crachás com QR Code</div>
-    <div style="font-size:12px;color:var(--text-dim);margin-bottom:16px">Imprima os crachás e entregue aos operadores para uso no sistema de retirada.</div>
-    <div id="crachas-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px"></div>
-  </div>
-</div>
 
 <!-- DASHBOARD -->
 <div id="panel-dashboard" class="panel">
@@ -623,6 +612,23 @@
     </div>
   </div>
 </div>
+<!-- MODAL QR CODE USUÁRIO -->
+<div id="modal-qr" style="position:fixed;inset:0;background:rgba(5,13,26,0.92);z-index:8000;display:none;align-items:center;justify-content:center">
+  <div style="background:var(--bg2);border:1px solid var(--border-hi);padding:28px 32px;max-width:340px;width:90%;clip-path:polygon(0 0,calc(100% - 16px) 0,100% 16px,100% 100%,16px 100%,0 calc(100% - 16px));text-align:center">
+    <div style="font-size:10px;letter-spacing:2px;color:var(--cyan);text-transform:uppercase;font-weight:700;margin-bottom:16px">QR Code do Crachá</div>
+    <div id="modal-qr-nome" style="font-size:15px;font-weight:700;color:var(--text);margin-bottom:4px"></div>
+    <div id="modal-qr-nivel" style="font-size:10px;letter-spacing:1px;text-transform:uppercase;margin-bottom:16px"></div>
+    <div style="background:white;padding:12px;display:inline-block;border-radius:4px;margin-bottom:16px">
+      <div id="modal-qr-code"></div>
+    </div>
+    <div style="font-size:10px;color:var(--text-dim);margin-bottom:16px">Imprima e entregue ao operador para usar no sistema de retirada</div>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button class="hud-btn" onclick="window.imprimirQRModal()"><i class="ti ti-printer"></i>Imprimir</button>
+      <button class="hud-btn danger" onclick="window.fecharModalQR()"><i class="ti ti-x"></i>Fechar</button>
+    </div>
+  </div>
+</div>
+
 <!-- MODAL ENVIO LISTA PLANEJADOR -->
 <div id="modal-lista" style="position:fixed;inset:0;background:rgba(5,13,26,0.92);z-index:6000;display:none;align-items:center;justify-content:center">
   <div style="background:var(--bg2);border:1px solid var(--border-hi);padding:28px 32px;max-width:680px;width:95%;clip-path:polygon(0 0,calc(100% - 20px) 0,100% 20px,100% 100%,20px 100%,0 calc(100% - 20px));max-height:90vh;overflow-y:auto">
