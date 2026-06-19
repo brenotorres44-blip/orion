@@ -4,13 +4,23 @@
 // ══════════════════════════════════════════════
 import { toast, armarios, armById, pinosConfig, setPinosConfig, setEspOnlineState, espOnline } from './utils.js';
 
-function espUrl(rota){ const ip=document.getElementById('esp-ip')?.value.trim()||'192.168.1.50'; const port=document.getElementById('esp-porta')?.value.trim()||'80'; return `http://${ip}:${port}${rota}`; }
+function espUrl(rota){
+  const ip   = document.getElementById('esp-ip')?.value.trim()   || localStorage.getItem('esp_ip')   || '192.168.1.50';
+  const port = document.getElementById('esp-porta')?.value.trim() || localStorage.getItem('esp_port') || '80';
+  return `http://${ip}:${port}${rota}`;
+}
+function salvarEspConfig() {
+  const ip   = document.getElementById('esp-ip')?.value.trim();
+  const port = document.getElementById('esp-porta')?.value.trim();
+  if(ip)   localStorage.setItem('esp_ip',   ip);
+  if(port) localStorage.setItem('esp_port', port);
+}
 export async function espPost(rota,body){ try{ const r=await fetch(espUrl(rota),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(4000)}); return await r.json(); } catch(e){ return null; } }
 async function espGet(rota){ try{ const r=await fetch(espUrl(rota),{signal:AbortSignal.timeout(4000)}); return await r.json(); } catch(e){ return null; } }
 
 function setEspStatus(online,msg=''){ setEspOnlineState(online); const el=document.getElementById('esp32-status'); const box=document.getElementById('esp-conn-status'); if(el){el.textContent=online?'ONLINE':'OFFLINE';el.style.color=online?'var(--green)':'var(--red)';} if(box) box.innerHTML=online?`<span class="led"></span> Conectado — ${msg}`:`<span class="led red"></span> ${msg||'Sem resposta'}`; }
 
-window.testarConexao=async function(){ const box=document.getElementById('esp-conn-status'); if(box) box.innerHTML=`<span class="led amber"></span> Testando...`; const res=await espGet('/ping'); if(res?.status==='online') setEspStatus(true,`IP ${res.ip} · ${res.gavetas} gavetas`); else setEspStatus(false,'Verifique o IP e se o ESP32 está ligado'); }
+window.testarConexao=async function(){ salvarEspConfig(); const box=document.getElementById('esp-conn-status'); if(box) box.innerHTML=`<span class="led amber"></span> Testando...`; const res=await espGet('/ping'); if(res?.status==='online') setEspStatus(true,`IP ${res.ip} · ${res.gavetas} gavetas`); else setEspStatus(false,'Verifique o IP e se o ESP32 está ligado'); }
 window.testarLeds=async function(){ const res=await espGet('/teste'); if(res?.ok) toast('Sequência de LEDs enviada ✓',''); else toast('ESP32 não respondeu','red'); }
 window.fecharTodasTravas=async function(){ const res=await espPost('/trava/todas',{}); if(res?.ok) toast('Todas as travas fechadas ✓',''); else toast('ESP32 não respondeu','red'); }
 
